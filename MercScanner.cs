@@ -76,7 +76,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     #region Drawing Logic
     private void DrawFrameOnMercItems()
     {
-        if (!Settings.HighlightMercenaryItems.Value) return;
+        if (!Settings.HighlightMercenary.Value) return;
 
         foreach (var label in GameController.IngameState.IngameUi.ItemsOnGroundLabels)
         {

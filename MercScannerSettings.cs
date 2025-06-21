@@ -17,7 +17,7 @@ public class MercScannerSettings : ISettings
     public ToggleNode ShowAllSkills { get; set; } = new ToggleNode(true);
     public ContentNode<TextNode> Auras { get; set; } = new ContentNode<TextNode>() { EnableControls = true, UseFlatItems = true, ItemFactory = () => new TextNode("") };
     
-    public ToggleNode HighlightMercenaryItems { get; set; } = new ToggleNode(true);
+    public ToggleNode HighlightMercenary { get; set; } = new ToggleNode(true);
     public ColorNode StrColor { get; set; } = new ColorNode(System.Drawing.Color.FromArgb(210, 0, 0).ToSharpDx());
     public ColorNode DexColor { get; set; } = new ColorNode(System.Drawing.Color.FromArgb(0, 210, 0).ToSharpDx());
     public ColorNode IntColor { get; set; } = new ColorNode(System.Drawing.Color.FromArgb(0, 128, 255).ToSharpDx());

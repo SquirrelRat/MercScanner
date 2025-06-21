@@ -18,7 +18,7 @@ public class MercScannerSettingsDrawer
     {
         if (ImGui.CollapsingHeader("General Highlighting", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            DrawToggleNode("Highlight Mercenary Items", _settings.HighlightMercenaryItems);
+            DrawToggleNode("Highlight Mercenary", _settings.HighlightMercenary);
             ImGui.Spacing();
             DrawColorNode("Str Color", _settings.StrColor);
             DrawColorNode("Dex Color", _settings.DexColor);
@@ -65,7 +65,7 @@ public class MercScannerSettingsDrawer
             DrawColorNode("Default Skill Color", _settings.DefaultSkillColor);
             DrawColorNode("Background Color", _settings.BackgroundColor);
             ImGui.Separator();
-            DrawContentNode("Auras", _settings.Auras);
+            DrawContentNode("Skills and Auras", _settings.Auras);
         }
     }
 
