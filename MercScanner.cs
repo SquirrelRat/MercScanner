@@ -56,7 +56,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         var panels = GameController.IngameState.IngameUi;
         if ((!Settings.IgnoreLargePanels.Value && panels.LargePanels.Any(x => x.IsVisible)) ||
             (!Settings.IgnoreFullscreenPanels.Value && panels.FullscreenPanels.Any(x => x.IsVisible)) ||
-            panels.MercenaryEncounterWindow.IsVisible || panels.LeagueMechanicButtons.IsVisible)
+            panels.MercenaryEncounterWindow.IsVisible)
         {
             return;
         }
