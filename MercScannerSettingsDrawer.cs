@@ -1,13 +1,39 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using ExileCore.Shared.Nodes;
 using ImGuiNET;
 using SharpDX;
+using static MercScanner.MercScanner;
 
 namespace MercScanner;
 
 public class MercScannerSettingsDrawer
 {
     private readonly MercScannerSettings _settings;
+    private int _selectedTab;
+    private string _activeSliderEditId;
+    private readonly Dictionary<string, string> _sliderBuffers = new();
+
+    private static readonly (string Label, System.Numerics.Vector4 Color, List<StatType> Filter)[] StatGroups =
+    [
+        ("Strength",              new(0.82f, 0.12f, 0.12f, 1), [StatType.Str]),
+        ("Dexterity",             new(0.12f, 0.82f, 0.12f, 1), [StatType.Dex]),
+        ("Intelligence",          new(0.12f, 0.50f, 1.00f, 1), [StatType.Int]),
+        ("Str / Dex",             new(0.82f, 0.50f, 0.00f, 1), [StatType.Str, StatType.Dex]),
+        ("Str / Int",             new(0.82f, 0.30f, 0.60f, 1), [StatType.Str, StatType.Int]),
+        ("Dex / Int",             new(0.00f, 0.65f, 0.50f, 1), [StatType.Dex, StatType.Int]),
+        ("Str / Dex / Int",       new(0.60f, 0.30f, 0.60f, 1), [StatType.Str, StatType.Dex, StatType.Int]),
+    ];
+
+    private static readonly (string Label, System.Numerics.Vector4 Color)[] TabData =
+    [
+        ("Tiers",    new(0.50f, 0.80f, 1.00f, 1f)),
+        ("Overlays", new(0.40f, 0.75f, 0.95f, 1f)),
+        ("Items",    new(0.50f, 0.70f, 0.90f, 1f)),
+        ("Skills",   new(0.45f, 0.65f, 0.85f, 1f)),
+        ("Hired",    new(0.30f, 1.00f, 0.60f, 1f)),
+    ];
 
     public MercScannerSettingsDrawer(MercScannerSettings settings)
     {
@@ -16,83 +42,166 @@ public class MercScannerSettingsDrawer
 
     public void Draw()
     {
-        if (ImGui.CollapsingHeader("General Highlighting", ImGuiTreeNodeFlags.DefaultOpen))
-        {
-            DrawToggleNode("Highlight Mercenary", _settings.HighlightMercenary);
-            ImGui.Spacing();
-            DrawColorNode("Str Color", _settings.StrColor);
-            DrawColorNode("Dex Color", _settings.DexColor);
-            DrawColorNode("Int Color", _settings.IntColor);
-        }
+        PushWindowStyle();
 
-        if (ImGui.CollapsingHeader("Mercenary Tiers", ImGuiTreeNodeFlags.DefaultOpen))
+        DrawGeneralSettings();
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        var sidebarHeight = ImGui.GetContentRegionAvail().Y;
+        if (ImGui.BeginChild("Sidebar", new System.Numerics.Vector2(140f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
         {
-            DrawToggleNode("Show Tier Text", _settings.ShowTierText);
-            ImGui.Spacing();
-            DrawColorNode("S Tier Color", _settings.STierColor);
-            DrawColorNode("A Tier Color", _settings.ATierColor);
-            DrawColorNode("B Tier Color", _settings.BTierColor);
-            DrawColorNode("C Tier Color", _settings.CTierColor);
-            
-            ImGui.Separator();
-            ImGui.Text("Set tier by number. A key is provided for reference.");
-            ImGui.TextColored(new System.Numerics.Vector4(1, 1, 1, 0.7f), "Key: 0=None, 1=S, 2=A, 3=B, 4=C");
-            ImGui.Separator();
-            
-            ImGui.Columns(2, "MercenaryTierColumns", false);
-            ImGui.SetColumnWidth(0, 200);
-            
-            foreach (var mercName in _settings.MercenaryTiers.Keys.OrderBy(x => x).ToList())
+            for (var i = 0; i < TabData.Length; i++)
+                DrawTabSelector(TabData[i].Label, i, TabData[i].Color);
+        }
+        ImGui.EndChild();
+
+        ImGui.SameLine();
+
+        if (ImGui.BeginChild("Content", new System.Numerics.Vector2(ImGui.GetContentRegionAvail().X - 4f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
+        {
+            switch (_selectedTab)
             {
-                ImGui.Text(mercName);
-                ImGui.NextColumn();
-
-                int value = _settings.MercenaryTiers[mercName];
-                if (ImGui.SliderInt($"##{mercName}TierSlider", ref value, 0, 4))
-                {
-                    _settings.MercenaryTiers[mercName] = value;
-                }
-                ImGui.NextColumn();
+                case 0: DrawTiersTab(); break;
+                case 1: DrawOverlaysTab(); break;
+                case 2: DrawItemsTab(); break;
+                case 3: DrawSkillsTab(); break;
+                case 4: DrawHiredTab(); break;
             }
-            ImGui.Columns(1);
         }
+        ImGui.EndChild();
 
-        if (ImGui.CollapsingHeader("Idle Mercenary Skill Display", ImGuiTreeNodeFlags.DefaultOpen))
+        ImGui.PopStyleColor(20);
+        ImGui.PopStyleVar(9);
+    }
+
+    private void DrawTabSelector(string label, int index, System.Numerics.Vector4 color)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        if (ImGui.Selectable(label, _selectedTab == index))
+            _selectedTab = index;
+        ImGui.PopStyleColor();
+    }
+
+    private void DrawGeneralSettings()
+    {
+        ImGui.Text("General");
+        ImGui.Separator();
+        DrawToggleNode("Master Enable", _settings.Enable);
+        ImGui.Spacing();
+        ImGui.Text("Areas");
+        ImGui.Separator();
+        DrawToggleNode("Ignore Fullscreen Panels", _settings.IgnoreFullscreenPanels);
+        DrawToggleNode("Ignore Large Panels", _settings.IgnoreLargePanels);
+    }
+
+    private void DrawTiersTab()
+    {
+        DrawToggleNode("Show Tier Label", _settings.ShowTierText);
+        ImGui.Spacing();
+        DrawColorNode("S Tier", _settings.STierColor);
+        DrawColorNode("A Tier", _settings.ATierColor);
+        DrawColorNode("B Tier", _settings.BTierColor);
+        DrawColorNode("C Tier", _settings.CTierColor);
+
+        ImGui.Separator();
+        ImGui.TextDisabled("0=None  1=S  2=A  3=B  4=C");
+        ImGui.Separator();
+
+        var allNames = _settings.MercenaryTiers.Keys.OrderBy(x => x).ToList();
+
+        foreach (var group in StatGroups)
         {
-            DrawToggleNode("Show All Skills", _settings.ShowAllSkills);
-            ImGui.Spacing();
-            DrawColorNode("Highlight Skill Color", _settings.HighlightSkillColor);
-            DrawColorNode("Default Skill Color", _settings.DefaultSkillColor);
-            DrawColorNode("Background Color", _settings.BackgroundColor);
+            var groupNames = allNames
+                .Where(n => MercenaryStats.TryGetValue(n, out var s) && s.SequenceEqual(group.Filter))
+                .ToList();
+            if (groupNames.Count == 0) continue;
+
+            ImGui.PushStyleColor(ImGuiCol.Text, group.Color);
             ImGui.Separator();
-            DrawContentNode("Skills and Auras", _settings.Auras);
+            ImGui.Text(group.Label);
+            ImGui.Separator();
+            ImGui.PopStyleColor();
+
+            foreach (var name in groupNames)
+            {
+                var value = _settings.MercenaryTiers[name];
+                if (ModernSlider(name, ref value, 0, 4))
+                    _settings.MercenaryTiers[name] = value;
+            }
         }
+    }
+
+    private void DrawOverlaysTab()
+    {
+        DrawToggleNode("Enable Entity Overlays", _settings.ShowEntityOverlays);
+        ImGui.Spacing();
+        DrawToggleNode("Show HP Bar", _settings.ShowHpBar);
+        DrawToggleNode("Show ES Bar", _settings.ShowEsBar);
+        ImGui.Spacing();
+        DrawColorNode("HP Bar Color", _settings.HpBarColor);
+        DrawColorNode("ES Bar Color", _settings.EsBarColor);
+        ImGui.Spacing();
+        DrawToggleNode("Show Stat Rings", _settings.ShowEntityFrames);
+        DrawToggleNode("Show Tier Label", _settings.ShowEntityTier);
+        ImGui.Spacing();
+
+        var dist = _settings.MaxMercDistance.Value;
+        if (ModernSlider("Max Distance", ref dist, 10, 200))
+            _settings.MaxMercDistance.Value = dist;
+    }
+
+    private void DrawItemsTab()
+    {
+        DrawToggleNode("Highlight Mercenary Items", _settings.HighlightMercenary);
+        ImGui.Spacing();
+        DrawColorNode("Strength Color", _settings.StrColor);
+        DrawColorNode("Dexterity Color", _settings.DexColor);
+        DrawColorNode("Intelligence Color", _settings.IntColor);
+    }
+
+    private void DrawSkillsTab()
+    {
+        DrawToggleNode("Show All Skills", _settings.ShowAllSkills);
+        ImGui.Spacing();
+        DrawColorNode("Highlight Color", _settings.HighlightSkillColor);
+        DrawColorNode("Default Color", _settings.DefaultSkillColor);
+        DrawColorNode("Background Color", _settings.BackgroundColor);
+        DrawColorNode("Monster Skill Color", _settings.MonsterSkillColor);
+        ImGui.Separator();
+        DrawContentNode("Aura Filter", _settings.Auras);
     }
 
     private void DrawToggleNode(string label, ToggleNode node)
     {
-        bool value = node.Value;
+        var value = node.Value;
         if (ImGui.Checkbox(label, ref value))
-        {
             node.Value = value;
-        }
     }
-    
+
     private void DrawColorNode(string label, ColorNode node)
     {
-        var colorSharpDx = node.Value.ToVector4();
-        var colorNumerics = new System.Numerics.Vector4(colorSharpDx.X, colorSharpDx.Y, colorSharpDx.Z, colorSharpDx.W);
-
-        if (ImGui.ColorEdit4(label, ref colorNumerics, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar))
-        {
-            node.Value = new Color(colorNumerics.X, colorNumerics.Y, colorNumerics.Z, colorNumerics.W);
-        }
+        var sd = node.Value.ToVector4();
+        var v = new System.Numerics.Vector4(sd.X, sd.Y, sd.Z, sd.W);
+        if (ImGui.ColorEdit4(label, ref v, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar))
+            node.Value = new Color(v.X, v.Y, v.Z, v.W);
     }
-    
+
+    private void DrawHiredTab()
+    {
+        DrawToggleNode("Enable Hired Merc Overlays", _settings.ShowHiredMercOverlays);
+        ImGui.Spacing();
+        DrawToggleNode("Show HP Bar", _settings.ShowHiredMercHpBar);
+        DrawToggleNode("Show ES Bar", _settings.ShowHiredMercEsBar);
+        ImGui.Spacing();
+        DrawToggleNode("Show Action Panel", _settings.ShowHiredMercActionPanel);
+    }
+
     private void DrawContentNode(string label, ContentNode<TextNode> node)
     {
         ImGui.Text(label);
-        for (int i = node.Content.Count - 1; i >= 0; i--)
+        for (var i = node.Content.Count - 1; i >= 0; i--)
         {
             ImGui.PushID($"Aura_{i}");
             if (ImGui.Button("Remove"))
@@ -102,18 +211,180 @@ public class MercScannerSettingsDrawer
             else
             {
                 ImGui.SameLine();
-                string value = node.Content[i].Value;
-                if (ImGui.InputText("##AuraText", ref value, 100))
-                {
-                    node.Content[i].Value = value;
-                }
+                var val = node.Content[i].Value;
+                if (ImGui.InputText("##AuraText", ref val, 100))
+                    node.Content[i].Value = val;
             }
             ImGui.PopID();
         }
 
         if (ImGui.Button("Add item"))
-        {
             node.Content.Add(new TextNode(""));
+    }
+
+    private bool ModernSlider(string id, ref int value, int min, int max)
+    {
+        if (_activeSliderEditId == id)
+            return HandleSliderTextInput(id, ref value, min, max);
+
+        var floatValue = (float)value;
+        if (!ModernSliderFloat(id, ref floatValue, min, max, out var valueClicked))
+        {
+            if (valueClicked)
+            {
+                _activeSliderEditId = id;
+                _sliderBuffers[id] = value.ToString();
+            }
+            return false;
         }
+
+        value = (int)Math.Round(floatValue);
+        return true;
+    }
+
+    private bool HandleSliderTextInput(string id, ref int value, int min, int max)
+    {
+        if (!_sliderBuffers.TryGetValue(id, out var buffer))
+        {
+            buffer = value.ToString();
+            _sliderBuffers[id] = buffer;
+        }
+
+        ImGui.SetKeyboardFocusHere();
+        if (ImGui.InputText($"##{id}_edit", ref buffer, 10, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
+        {
+            if (int.TryParse(buffer, out var newValue))
+            {
+                value = Math.Clamp(newValue, min, max);
+            }
+            _activeSliderEditId = null;
+            _sliderBuffers.Remove(id);
+            return true;
+        }
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
+        {
+            _activeSliderEditId = null;
+            _sliderBuffers.Remove(id);
+        }
+
+        _sliderBuffers[id] = buffer;
+        return false;
+    }
+
+    private static uint PackColor(float r, float g, float b, float a)
+    {
+        return (uint)(a * 255) << 24 | (uint)(b * 255) << 16 | (uint)(g * 255) << 8 | (uint)(r * 255);
+    }
+
+    private bool ModernSliderFloat(string id, ref float value, float min, float max, out bool valueClicked)
+    {
+        valueClicked = false;
+        var labelSize = ImGui.CalcTextSize(id);
+        var valueText = ((int)value).ToString();
+        var valueSize = ImGui.CalcTextSize(valueText);
+        var height = Math.Max(labelSize.Y, valueSize.Y) + 6f;
+        var cursor = ImGui.GetCursorScreenPos();
+        var totalWidth = ImGui.GetContentRegionAvail().X;
+
+        var labelPosition = cursor;
+        var valuePosition = new System.Numerics.Vector2(cursor.X + totalWidth - valueSize.X, cursor.Y + (height - valueSize.Y) * 0.5f);
+        var lineStartX = cursor.X + labelSize.X + 12f;
+        var lineEndX = cursor.X + totalWidth - valueSize.X - 12f;
+        var lineLength = lineEndX - lineStartX;
+        var lineY = cursor.Y + height * 0.5f;
+
+        var valueRectMin = valuePosition;
+        var valueRectMax = new System.Numerics.Vector2(valuePosition.X + valueSize.X, valuePosition.Y + valueSize.Y);
+
+        if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            var mousePos = ImGui.GetMousePos();
+            if (mousePos.X >= valueRectMin.X && mousePos.X <= valueRectMax.X &&
+                mousePos.Y >= valueRectMin.Y && mousePos.Y <= valueRectMax.Y)
+            {
+                valueClicked = true;
+            }
+        }
+
+        var sliderButtonWidth = totalWidth;
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new System.Numerics.Vector2(0f, height + 2f));
+        ImGui.PushStyleColor(ImGuiCol.Button, 0);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0);
+        ImGui.PushStyleColor(ImGuiCol.Text, 0);
+        var clicked = ImGui.InvisibleButton($"##{id}", new System.Numerics.Vector2(sliderButtonWidth, height));
+        ImGui.PopStyleColor(4);
+        ImGui.PopStyleVar();
+
+        if (lineLength <= 0f || max <= min)
+            return false;
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddText(labelPosition, PackColor(0.70f, 0.85f, 1.00f, 1f), id);
+        drawList.AddText(valuePosition, PackColor(0.40f, 0.90f, 1.00f, 1f), valueText);
+
+        var normalized = Math.Clamp((value - min) / (max - min), 0f, 1f);
+        var dotX = lineStartX + normalized * lineLength;
+
+        drawList.AddLine(new System.Numerics.Vector2(lineStartX, lineY), new System.Numerics.Vector2(lineEndX, lineY), PackColor(0.08f, 0.25f, 0.40f, 1f), 2f);
+        drawList.AddLine(new System.Numerics.Vector2(lineStartX, lineY), new System.Numerics.Vector2(dotX, lineY), PackColor(0.20f, 0.75f, 0.95f, 0.7f), 2f);
+
+        var isActive = ImGui.IsItemActive();
+        var isHovered = ImGui.IsItemHovered();
+        var dotRadius = isActive ? 7f : isHovered ? 6.5f : 5.5f;
+        var dotColor = isActive
+            ? PackColor(0.40f, 0.90f, 1.00f, 1.0f)
+            : isHovered
+                ? PackColor(0.30f, 0.80f, 0.95f, 1.0f)
+                : PackColor(0.20f, 0.70f, 0.90f, 1.0f);
+
+        drawList.AddCircleFilled(new System.Numerics.Vector2(dotX, lineY), dotRadius, dotColor);
+        drawList.AddCircleFilled(new System.Numerics.Vector2(dotX, lineY), dotRadius - 2f, PackColor(0.02f, 0.08f, 0.15f, 1f));
+        drawList.AddCircleFilled(new System.Numerics.Vector2(dotX, lineY), dotRadius - 3.5f, dotColor);
+
+        if (!valueClicked && (isActive || (clicked && isHovered)))
+        {
+            var mousePosition = ImGui.GetMousePos();
+            var newNormalized = Math.Clamp((mousePosition.X - lineStartX) / lineLength, 0f, 1f);
+            value = Math.Clamp(min + newNormalized * (max - min), min, max);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void PushWindowStyle()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new System.Numerics.Vector2(10f, 10f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new System.Numerics.Vector2(6f, 3f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new System.Numerics.Vector2(8f, 4f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.TabRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 3f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 3f);
+
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new System.Numerics.Vector4(0.02f, 0.08f, 0.15f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new System.Numerics.Vector4(0.03f, 0.10f, 0.18f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Border, new System.Numerics.Vector4(0.20f, 0.50f, 0.70f, 0.50f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.06f, 0.18f, 0.30f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new System.Numerics.Vector4(0.10f, 0.30f, 0.50f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new System.Numerics.Vector4(0.15f, 0.40f, 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.CheckMark, new System.Numerics.Vector4(0.40f, 0.85f, 1.00f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.SliderGrab, new System.Numerics.Vector4(0.20f, 0.70f, 0.90f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, new System.Numerics.Vector4(0.40f, 0.85f, 1.00f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.08f, 0.25f, 0.45f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new System.Numerics.Vector4(0.15f, 0.40f, 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new System.Numerics.Vector4(0.25f, 0.55f, 0.80f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Header, new System.Numerics.Vector4(0.08f, 0.30f, 0.55f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new System.Numerics.Vector4(0.15f, 0.45f, 0.75f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, new System.Numerics.Vector4(0.25f, 0.60f, 0.90f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Separator, new System.Numerics.Vector4(0.20f, 0.45f, 0.65f, 0.40f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarBg, new System.Numerics.Vector4(0.03f, 0.08f, 0.12f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrab, new System.Numerics.Vector4(0.20f, 0.50f, 0.70f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabHovered, new System.Numerics.Vector4(0.35f, 0.65f, 0.85f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabActive, new System.Numerics.Vector4(0.50f, 0.80f, 1.00f, 1f));
     }
 }
