@@ -14,6 +14,7 @@ public class MercScannerSettingsDrawer
     private int _selectedTab;
     private string _activeSliderEditId;
     private readonly Dictionary<string, string> _sliderBuffers = new();
+    private int _selectedAuraIndex = -1;
 
     private static readonly (string Label, System.Numerics.Vector4 Color, List<StatType> Filter)[] StatGroups =
     [
@@ -28,12 +29,51 @@ public class MercScannerSettingsDrawer
 
     private static readonly (string Label, System.Numerics.Vector4 Color)[] TabData =
     [
-        ("Tiers",    new(0.50f, 0.80f, 1.00f, 1f)),
-        ("Overlays", new(0.40f, 0.75f, 0.95f, 1f)),
-        ("Items",    new(0.50f, 0.70f, 0.90f, 1f)),
-        ("Skills",   new(0.45f, 0.65f, 0.85f, 1f)),
-        ("Hired",    new(0.30f, 1.00f, 0.60f, 1f)),
+        ("Tiers",          new(0.50f, 0.80f, 1.00f, 1f)),
+        ("Unhired Mercs",  new(0.40f, 0.75f, 0.95f, 1f)),
+        ("Frames",         new(0.50f, 0.70f, 0.90f, 1f)),
+        ("Skills & Auras", new(0.45f, 0.65f, 0.85f, 1f)),
+        ("Hired Mercs",    new(0.30f, 1.00f, 0.60f, 1f)),
     ];
+
+    private static readonly (string InternalName, string DisplayName)[] KnownAuraEntries =
+    [
+        ("anger", "Anger"),
+        ("wrath", "Wrath"),
+        ("hatred", "Hatred"),
+        ("determination", "Determination"),
+        ("grace", "Grace"),
+        ("discipline", "Discipline"),
+        ("haste", "Haste"),
+        ("malevolence", "Malevolence"),
+        ("pride", "Pride"),
+        ("zealotry", "Zealotry"),
+        ("clarity", "Clarity"),
+        ("vitality", "Vitality"),
+        ("precision", "Precision"),
+        ("envy", "Envy"),
+        ("purity_of_fire", "Purity of Fire"),
+        ("purity_of_ice", "Purity of Ice"),
+        ("purity_of_lightning", "Purity of Lightning"),
+        ("herald_of_ash", "Herald of Ash"),
+        ("herald_of_ice", "Herald of Ice"),
+        ("herald_of_thunder", "Herald of Thunder"),
+        ("herald_of_agony", "Herald of Agony"),
+        ("herald_of_purity", "Herald of Purity"),
+        ("aspect_of_the_spider", "Aspect of the Spider"),
+        ("aspect_of_the_avian", "Aspect of the Avian"),
+        ("aspect_of_the_crab", "Aspect of the Crab"),
+        ("aspect_of_the_cat", "Aspect of the Cat"),
+        ("war_banner", "War Banner"),
+        ("dread_banner", "Dread Banner"),
+        ("defiance_banner", "Defiance Banner"),
+        ("arctic_armour", "Arctic Armour"),
+        ("summon_skitterbots", "Summon Skitterbots"),
+        ("vaal_vitality", "Vaal Vitality"),
+    ];
+
+    private static readonly string[] KnownAuraDisplayNames =
+        KnownAuraEntries.Select(e => e.DisplayName).ToArray();
 
     public MercScannerSettingsDrawer(MercScannerSettings settings)
     {
@@ -64,9 +104,9 @@ public class MercScannerSettingsDrawer
             switch (_selectedTab)
             {
                 case 0: DrawTiersTab(); break;
-                case 1: DrawOverlaysTab(); break;
-                case 2: DrawItemsTab(); break;
-                case 3: DrawSkillsTab(); break;
+                case 1: DrawUnhiredMercsTab(); break;
+                case 2: DrawFramesTab(); break;
+                case 3: DrawSkillsAurasTab(); break;
                 case 4: DrawHiredTab(); break;
             }
         }
@@ -109,6 +149,32 @@ public class MercScannerSettingsDrawer
         ImGui.TextDisabled("0=None  1=S  2=A  3=B  4=C");
         ImGui.Separator();
 
+        ImGui.Spacing();
+        ImGui.Text("Tier Frame");
+        ImGui.Separator();
+        DrawToggleNode("Show Fill Background", _settings.ShowTierFrame);
+        if (_settings.ShowTierFrame.Value)
+        {
+            var opacity = _settings.TierFrameFillOpacity.Value;
+            if (ModernSlider("Fill Opacity", ref opacity, 0, 100))
+                _settings.TierFrameFillOpacity.Value = opacity;
+        }
+
+        ImGui.Spacing();
+        DrawToggleNode("Show Snake Effect (S tier only)", _settings.ShowTierSnake);
+        if (_settings.ShowTierSnake.Value)
+        {
+            var speed = _settings.TierSnakeSpeed.Value;
+            if (ImGui.SliderFloat("Speed", ref speed, _settings.TierSnakeSpeed.Min, _settings.TierSnakeSpeed.Max))
+                _settings.TierSnakeSpeed.Value = speed;
+
+            var intensity = _settings.TierSnakeIntensity.Value;
+            if (ImGui.SliderFloat("Intensity", ref intensity, _settings.TierSnakeIntensity.Min, _settings.TierSnakeIntensity.Max))
+                _settings.TierSnakeIntensity.Value = intensity;
+        }
+
+        ImGui.Separator();
+
         var allNames = _settings.MercenaryTiers.Keys.OrderBy(x => x).ToList();
 
         foreach (var group in StatGroups)
@@ -133,7 +199,7 @@ public class MercScannerSettingsDrawer
         }
     }
 
-    private void DrawOverlaysTab()
+    private void DrawUnhiredMercsTab()
     {
         DrawToggleNode("Enable Entity Overlays", _settings.ShowEntityOverlays);
         ImGui.Spacing();
@@ -152,7 +218,7 @@ public class MercScannerSettingsDrawer
             _settings.MaxMercDistance.Value = dist;
     }
 
-    private void DrawItemsTab()
+    private void DrawFramesTab()
     {
         DrawToggleNode("Highlight Mercenary Items", _settings.HighlightMercenary);
         ImGui.Spacing();
@@ -161,16 +227,105 @@ public class MercScannerSettingsDrawer
         DrawColorNode("Intelligence Color", _settings.IntColor);
     }
 
-    private void DrawSkillsTab()
+    private void DrawSkillsAurasTab()
     {
-        DrawToggleNode("Show All Skills", _settings.ShowAllSkills);
+        if (ImGui.CollapsingHeader("Skills", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawToggleNode("Show All Skills", _settings.ShowAllSkills);
+            ImGui.Spacing();
+            DrawColorNode("Highlight Color", _settings.HighlightSkillColor);
+            DrawColorNode("Default Color", _settings.DefaultSkillColor);
+            DrawColorNode("Monster Skill Color", _settings.MonsterSkillColor);
+
+            ImGui.Spacing();
+            if (ImGui.CollapsingHeader("Filters", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                DrawFilterQuickAdd();
+                ImGui.Separator();
+                DrawContentNode("Aura & Skill Filter", _settings.SkillFilter);
+            }
+        }
+
         ImGui.Spacing();
-        DrawColorNode("Highlight Color", _settings.HighlightSkillColor);
-        DrawColorNode("Default Color", _settings.DefaultSkillColor);
-        DrawColorNode("Background Color", _settings.BackgroundColor);
-        DrawColorNode("Monster Skill Color", _settings.MonsterSkillColor);
+        if (ImGui.CollapsingHeader("Auras", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawToggleNode("Separate Aura Display", _settings.SeparateAuraDisplay);
+            DrawToggleNode("Auto-Detect Known Auras", _settings.AutoDetectAuras);
+            DrawToggleNode("Show Aura Timers", _settings.ShowAuraTimers);
+            ImGui.Spacing();
+            DrawColorNode("Active Aura Color", _settings.AuraActiveColor);
+            DrawColorNode("Inactive Aura Color", _settings.AuraInactiveColor);
+        }
+
         ImGui.Separator();
-        DrawContentNode("Aura Filter", _settings.Auras);
+        DrawColorNode("Background Color", _settings.BackgroundColor);
+    }
+
+    private void DrawFilterQuickAdd()
+    {
+        ImGui.Text("Quick Add Aura");
+        ImGui.SameLine();
+        ImGui.PushItemWidth(180f);
+
+        var preview = _selectedAuraIndex >= 0 && _selectedAuraIndex < KnownAuraDisplayNames.Length
+            ? KnownAuraDisplayNames[_selectedAuraIndex]
+            : "Select...";
+
+        if (ImGui.BeginCombo("##auraQuickAdd", preview))
+        {
+            for (var i = 0; i < KnownAuraDisplayNames.Length; i++)
+            {
+                var isSelected = _selectedAuraIndex == i;
+                if (ImGui.Selectable(KnownAuraDisplayNames[i], isSelected))
+                {
+                    _selectedAuraIndex = i;
+                    var displayName = KnownAuraDisplayNames[i];
+                    if (!_settings.SkillFilter.Content.Any(x =>
+                            x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
+                    {
+                        _settings.SkillFilter.Content.Add(new TextNode(displayName));
+                    }
+                }
+                if (isSelected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+
+        ImGui.SameLine();
+        if (ImGui.Button("Add +"))
+        {
+            if (_selectedAuraIndex >= 0 && _selectedAuraIndex < KnownAuraDisplayNames.Length)
+            {
+                var displayName = KnownAuraDisplayNames[_selectedAuraIndex];
+                if (!_settings.SkillFilter.Content.Any(x =>
+                        x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
+                {
+                    _settings.SkillFilter.Content.Add(new TextNode(displayName));
+                }
+            }
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Add the selected aura to your filter list");
+
+        ImGui.SameLine();
+        if (ImGui.Button("Add All"))
+        {
+            foreach (var (_, displayName) in KnownAuraEntries)
+            {
+                if (!_settings.SkillFilter.Content.Any(x =>
+                        x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
+                {
+                    _settings.SkillFilter.Content.Add(new TextNode(displayName));
+                }
+            }
+        }
+
+        ImGui.Spacing();
+        if (ImGui.Button("Clear All"))
+        {
+            _settings.SkillFilter.Content.Clear();
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove all filter entries");
     }
 
     private void DrawToggleNode(string label, ToggleNode node)
@@ -203,7 +358,7 @@ public class MercScannerSettingsDrawer
         ImGui.Text(label);
         for (var i = node.Content.Count - 1; i >= 0; i--)
         {
-            ImGui.PushID($"Aura_{i}");
+            ImGui.PushID($"{label}_{i}");
             if (ImGui.Button("Remove"))
             {
                 node.Content.RemoveAt(i);
@@ -212,13 +367,13 @@ public class MercScannerSettingsDrawer
             {
                 ImGui.SameLine();
                 var val = node.Content[i].Value;
-                if (ImGui.InputText("##AuraText", ref val, 100))
+                if (ImGui.InputText($"##{label}Text", ref val, 100))
                     node.Content[i].Value = val;
             }
             ImGui.PopID();
         }
 
-        if (ImGui.Button("Add item"))
+        if (ImGui.Button($"Add item##{label}Add"))
             node.Content.Add(new TextNode(""));
     }
 
