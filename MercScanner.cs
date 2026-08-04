@@ -20,24 +20,49 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     #region Data
     internal enum StatType { Str, Dex, Int }
+    internal enum MercTier { None = 0, S = 1, A = 2, B = 3, C = 4 }
     internal static readonly Dictionary<string, List<StatType>> MercenaryStats = InitializeMercStats();
     internal static readonly string[] MercenaryKeysSorted = [.. MercenaryStats.Keys.OrderByDescending(k => k.Length)];
 
-    internal static readonly HashSet<string> KnownAuraInternalNames =
+    internal static readonly (string InternalName, string DisplayName)[] KnownAuraEntries =
     [
-        "anger", "wrath", "hatred", "determination", "grace", "discipline",
-        "haste", "malevolence", "pride", "zealotry", "clarity", "vitality",
-        "purity_of_fire", "purity_of_ice", "purity_of_lightning",
-        "envy", "precision",
-        "herald_of_ash", "herald_of_ice", "herald_of_thunder",
-        "herald_of_agony", "herald_of_purity",
-        "aspect_of_the_spider", "aspect_of_the_avian",
-        "aspect_of_the_crab", "aspect_of_the_cat",
-        "war_banner", "dread_banner", "defiance_banner",
-        "arctic_armour",
-        "vaal_vitality",
-        "summon_skitterbots"
+        ("anger", "Anger"),
+        ("wrath", "Wrath"),
+        ("hatred", "Hatred"),
+        ("determination", "Determination"),
+        ("grace", "Grace"),
+        ("discipline", "Discipline"),
+        ("haste", "Haste"),
+        ("malevolence", "Malevolence"),
+        ("pride", "Pride"),
+        ("zealotry", "Zealotry"),
+        ("clarity", "Clarity"),
+        ("vitality", "Vitality"),
+        ("precision", "Precision"),
+        ("envy", "Envy"),
+        ("purity_of_fire", "Purity of Fire"),
+        ("purity_of_ice", "Purity of Ice"),
+        ("purity_of_lightning", "Purity of Lightning"),
+        ("herald_of_ash", "Herald of Ash"),
+        ("herald_of_ice", "Herald of Ice"),
+        ("herald_of_thunder", "Herald of Thunder"),
+        ("herald_of_agony", "Herald of Agony"),
+        ("herald_of_purity", "Herald of Purity"),
+        ("aspect_of_the_spider", "Aspect of the Spider"),
+        ("aspect_of_the_avian", "Aspect of the Avian"),
+        ("aspect_of_the_crab", "Aspect of the Crab"),
+        ("aspect_of_the_cat", "Aspect of the Cat"),
+        ("war_banner", "War Banner"),
+        ("dread_banner", "Dread Banner"),
+        ("defiance_banner", "Defiance Banner"),
+        ("arctic_armour", "Arctic Armour"),
+        ("summon_skitterbots", "Summon Skitterbots"),
+        ("vaal_vitality", "Vaal Vitality"),
     ];
+
+    internal static readonly HashSet<string> KnownAuraInternalNames = [.. KnownAuraEntries.Select(e => e.InternalName)];
+
+    internal const float PermanentBuffTime = 86400f;
 
     #endregion
 
@@ -50,6 +75,48 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return !string.IsNullOrWhiteSpace(displayName)
             ? (displayName.EndsWith("Mercenary") ? displayName[..^"Mercenary".Length] : displayName)
             : (skill.Name.EndsWith("Mercenary") ? skill.Name[..^"Mercenary".Length] : skill.Name);
+    }
+
+    private static int GetStatInt(Stats stats, GameStat stat)
+    {
+        return stats.StatDictionary != null && stats.StatDictionary.TryGetValue(stat, out var value) ? value : 0;
+    }
+
+    private static List<StatType> GetMercStatTypes(Entity mon, string name)
+    {
+        if (mon.TryGetComponent<Stats>(out var stats))
+        {
+            if (GetStatInt(stats, GameStat.Level) > 0)
+            {
+                var str = GetStatInt(stats, GameStat.Strength);
+                var dex = GetStatInt(stats, GameStat.Dexterity);
+                var intel = GetStatInt(stats, GameStat.Intelligence);
+                if (str + dex + intel > 0)
+                {
+                    var max = Math.Max(str, Math.Max(dex, intel));
+                    if (max <= 0) return null;
+
+                    var threshold = Math.Max(1, (int)(max * 0.72f));
+                    var list = new List<StatType>(3);
+                    if (str >= threshold) list.Add(StatType.Str);
+                    if (dex >= threshold) list.Add(StatType.Dex);
+                    if (intel >= threshold) list.Add(StatType.Int);
+                    return list;
+                }
+            }
+        }
+
+        return name != null ? MercenaryStats.GetValueOrDefault(name) : null;
+    }
+
+    private static int? GetMercLevel(Entity mon)
+    {
+        if (mon.TryGetComponent<Stats>(out var stats))
+        {
+            var level = GetStatInt(stats, GameStat.Level);
+            if (level > 0) return level;
+        }
+        return null;
     }
 
     private Buff FindActiveAuraBuff(Buffs buffs, ActorSkill skill, string auraName)
@@ -129,7 +196,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     #region Core Plugin Methods
     public override bool Initialise()
     {
-        _settingsDrawer = new MercScannerSettingsDrawer(Settings);
+        _settingsDrawer = new MercScannerSettingsDrawer(this, Settings);
 
         _skillAttributeMap = new Dictionary<string, StatType?>(StringComparer.OrdinalIgnoreCase);
         try
@@ -167,19 +234,59 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     public override Job Tick() => null;
 
+    public void AutoAssignTiers()
+    {
+        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return;
+
+        foreach (var mon in monsters)
+        {
+            if (mon.IsHostile) continue;
+            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
+            var name = mon.RenderName;
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (GetMercLevel(mon) == null) continue;
+
+            Settings.MercenaryTiers[name] = (int)ComputeSuggestedTier(mon);
+        }
+    }
+
+    private static MercTier ComputeSuggestedTier(Entity mon)
+    {
+        if (!mon.TryGetComponent<Stats>(out var stats)) return MercTier.C;
+
+        var score = GetStatInt(stats, GameStat.Level)
+            + GetStatInt(stats, GameStat.DamagePct) / 10f
+            + (GetStatInt(stats, GameStat.CastSpeedPct) + GetStatInt(stats, GameStat.AttackSpeedPct)) / 20f
+            + GetStatInt(stats, GameStat.MovementVelocityPct) / 20f
+            + (GetStatInt(stats, GameStat.BaseFireDamageResistancePct)
+               + GetStatInt(stats, GameStat.BaseColdDamageResistancePct)
+               + GetStatInt(stats, GameStat.BaseLightningDamageResistancePct)) / 30f;
+
+        return score switch
+        {
+            >= 70f => MercTier.S,
+            >= 55f => MercTier.A,
+            >= 40f => MercTier.B,
+            _ => MercTier.C
+        };
+    }
+
     public override void Render()
     {
         var panels = GameController.IngameState.IngameUi;
+        var encounter = panels.MercenaryEncounterWindow;
+        var ally = panels.AllyEquipmentWindow;
 
-        if ((!Settings.IgnoreLargePanels.Value && panels.LargePanels.Any(x => x.IsVisible)) ||
-            (!Settings.IgnoreFullscreenPanels.Value && panels.FullscreenPanels.Any(x => x.IsVisible)))
+        if ((!Settings.IgnoreLargePanels.Value && panels.LargePanels.Any(x => x.IsVisible && x.Address != encounter.Address && x.Address != ally.Address)) ||
+            (!Settings.IgnoreFullscreenPanels.Value && panels.FullscreenPanels.Any(x => x.IsVisible && x.Address != encounter.Address && x.Address != ally.Address)))
         {
             return;
         }
 
         DrawMercenaryOverlays();
+        DrawOffScreenIndicators();
 
-        if (!panels.MercenaryEncounterWindow.IsVisible && !panels.AllyEquipmentWindow.IsVisible)
+        if (!encounter.IsVisible && !ally.IsVisible)
         {
             DrawFrameOnMercItems();
         }
@@ -215,7 +322,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
                 var stats = MercenaryStats[matchedMercKey];
                 var labelRect = label.Label.GetClientRect();
-                int tierValue = Settings.MercenaryTiers.GetValueOrDefault(matchedMercKey, 0);
+                var tierValue = (MercTier)Settings.MercenaryTiers.GetValueOrDefault(matchedMercKey, 0);
                 var iconRect = iconElement.GetClientRect();
 
                 var outerFrameRect = iconRect;
@@ -230,9 +337,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         }
     }
 
-    private void DrawTierFrame(RectangleF fillRect, RectangleF snakeRect, int tierValue)
+    private void DrawTierFrame(RectangleF fillRect, RectangleF snakeRect, MercTier tierValue)
     {
-        if (tierValue == 0) return;
+        if (tierValue == MercTier.None) return;
         var (_, tierColor) = GetTierInfo(tierValue);
 
         if (Settings.ShowTierFrame.Value)
@@ -244,7 +351,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             Graphics.DrawBox(paddedRect, fillColor);
         }
 
-        if (Settings.ShowTierSnake.Value && tierValue == 1)
+        if (Settings.ShowTierSnake.Value && tierValue == MercTier.S)
         {
             DrawSnakeEffect(snakeRect, tierColor,
                 Settings.TierSnakeSpeed.Value,
@@ -257,8 +364,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     {
         if (!Settings.ShowTierText.Value) return;
 
-        int tierValue = Settings.MercenaryTiers.GetValueOrDefault(mercName, 0);
-        if (tierValue == 0) return;
+        var tierValue = (MercTier)Settings.MercenaryTiers.GetValueOrDefault(mercName, 0);
+        if (tierValue == MercTier.None) return;
 
         (string tierText, Color tierColor) = GetTierInfo(tierValue);
 
@@ -274,12 +381,12 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         Graphics.DrawTextWithBackground(tierText, drawPos, tierColor, Settings.BackgroundColor.Value);
     }
 
-    private (string, Color) GetTierInfo(int tierValue) => tierValue switch
+    private (string, Color) GetTierInfo(MercTier tier) => tier switch
     {
-        1 => ("S Tier", Settings.STierColor.Value),
-        2 => ("A Tier", Settings.ATierColor.Value),
-        3 => ("B Tier", Settings.BTierColor.Value),
-        4 => ("C Tier", Settings.CTierColor.Value),
+        MercTier.S => ("S Tier", Settings.STierColor.Value),
+        MercTier.A => ("A Tier", Settings.ATierColor.Value),
+        MercTier.B => ("B Tier", Settings.BTierColor.Value),
+        MercTier.C => ("C Tier", Settings.CTierColor.Value),
         _ => ("None", Color.White)
     };
 
@@ -324,7 +431,10 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             if (merScreenPos.Y < 0) continue;
 
             var name = mon.RenderName;
-            var stats = name != null ? MercenaryStats.GetValueOrDefault(name) : null;
+            var stats = Settings.UseLiveStatInference.Value
+                ? GetMercStatTypes(mon, name)
+                : (name != null ? MercenaryStats.GetValueOrDefault(name) : null);
+            var level = Settings.UseLiveStatInference.Value ? GetMercLevel(mon) : null;
 
             mon.TryGetComponent<Actor>(out var actor);
             mon.TryGetComponent<Life>(out var life);
@@ -335,6 +445,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             if (isHired)
             {
                 if (!Settings.ShowHiredMercOverlays.Value) continue;
+
+                if (Settings.ShowMercLevel.Value && level is { } hiredLevel)
+                    DrawTextAbove(centerX, $"Lvl {hiredLevel}", Settings.DefaultSkillColor.Value, merScreenPos.Y, lineHeight);
 
                 if (life != null)
                 {
@@ -356,15 +469,18 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 if (stats != null && Settings.ShowEntityFrames.Value)
                     DrawEntityFrames(centerX, merScreenPos.Y, stats);
 
+                var labelTop = merScreenPos.Y;
                 if (name != null && Settings.ShowEntityTier.Value)
                 {
-                    int tierValue = Settings.MercenaryTiers.GetValueOrDefault(name, 0);
-                    if (tierValue != 0)
+                    var tierValue = (MercTier)Settings.MercenaryTiers.GetValueOrDefault(name, 0);
+                    if (tierValue != MercTier.None)
                     {
                         var (tierText, tierColor) = GetTierInfo(tierValue);
-                        DrawTextAbove(centerX, tierText, tierColor, merScreenPos.Y, lineHeight);
+                        labelTop = DrawTextAbove(centerX, tierText, tierColor, labelTop, lineHeight);
                     }
                 }
+                if (Settings.ShowMercLevel.Value && level is { } mercLevel)
+                    labelTop = DrawTextAbove(centerX, $"Lvl {mercLevel}", Settings.DefaultSkillColor.Value, labelTop, lineHeight);
 
                 if (life != null)
                 {
@@ -480,22 +596,38 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 var activeBuff = FindActiveAuraBuff(buffs, skill, auraName);
 
                 var isActive = activeBuff != null;
-                var timerText = isActive && activeBuff.MaxTime > 0 && activeBuff.MaxTime < 86400f
+                var timerText = isActive && activeBuff.MaxTime > 0 && activeBuff.MaxTime < PermanentBuffTime
                     ? $" {activeBuff.Timer:F1}s"
-                    : isActive ? "" : "";
+                    : "";
 
-                var text = isActive ? $"+ {auraName}{timerText}" : $"- {auraName}";
+                var text = isActive ? $">> {auraName}{timerText} <<" : $"- {auraName}";
                 var textSize = ImGui.CalcTextSize(text);
                 var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
 
-                if (isActive)
-                {
-                    var textRect = new RectangleF(drawPos.X - 2, drawPos.Y - 1, textSize.X + 4, textSize.Y + 2);
-                    Graphics.DrawFrame(textRect, Settings.AuraActiveColor.Value, 1);
-                }
-
                 var color = isActive ? Settings.AuraActiveColor.Value : new Color(0.45f, 0.45f, 0.45f, 1f);
                 Graphics.DrawTextWithBackground(text, drawPos, color, Settings.BackgroundColor.Value);
+                line++;
+            }
+        }
+
+        if (Settings.ShowHiredMercBuffs.Value && buffs?.BuffsList != null)
+        {
+            foreach (var buff in buffs.BuffsList)
+            {
+                var buffName = buff.DisplayName ?? buff.Name;
+                if (string.IsNullOrWhiteSpace(buffName)) continue;
+
+                var isHighlighted = Settings.SkillFilter.Content.Any(x =>
+                    !string.IsNullOrWhiteSpace(x.Value) &&
+                    buffName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
+                if (!isHighlighted) continue;
+
+                var timerText = buff.MaxTime > 0 && buff.MaxTime < PermanentBuffTime ? $" {buff.Timer:F1}s" : "";
+                var text = $">> {buffName}{timerText} <<";
+                var textSize = ImGui.CalcTextSize(text);
+                var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
+
+                Graphics.DrawTextWithBackground(text, drawPos, Settings.AuraActiveColor.Value, Settings.BackgroundColor.Value);
                 line++;
             }
         }
@@ -542,7 +674,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
             if (!isHighlighted) continue;
 
-            var timerText = buff.MaxTime > 0 && buff.MaxTime < 86400f ? $" {buff.Timer:F1}s" : "";
+            var timerText = Settings.ShowAuraTimers.Value && buff.MaxTime > 0 && buff.MaxTime < PermanentBuffTime ? $" {buff.Timer:F1}s" : "";
             var displayText = $"> {buffName}{timerText} <";
             var textSize = ImGui.CalcTextSize(displayText);
             var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
@@ -577,26 +709,15 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
             if (isAura && Settings.SeparateAuraDisplay.Value) continue;
 
-            var labeledName = isAura && !Settings.SeparateAuraDisplay.Value ? $">> {skillName} <<" : skillName;
+            var labeledName = skillName;
             var showHighlight = isSkillHighlighted || (isAura && !Settings.SeparateAuraDisplay.Value);
             if (showHighlight) labeledName = $">> {skillName} <<";
 
-            var skillColor = showHighlight
-                ? Settings.HighlightSkillColor.Value
-                : GetSkillColorForSkill(skill, skillName);
+            var attrColor = GetSkillColorForSkill(skill, skillName);
+            var skillColor = showHighlight ? Settings.HighlightSkillColor.Value : attrColor;
 
             var textSize = ImGui.CalcTextSize(labeledName);
             var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-
-            var attrColor = GetSkillColorForSkill(skill, skillName);
-
-            if (showHighlight)
-            {
-                var textRect = new RectangleF(drawPos.X - 3, drawPos.Y - 2, textSize.X + 6, textSize.Y + 4);
-                var fillColor = new Color(attrColor.R, attrColor.G, attrColor.B, (byte)35);
-                Graphics.DrawBox(textRect, fillColor);
-                Graphics.DrawFrame(textRect, skillColor, 1);
-            }
 
             Graphics.DrawTextWithBackground(labeledName, drawPos,
                 skillColor, showHighlight ? new Color(attrColor.R, attrColor.G, attrColor.B, (byte)155) : Settings.BackgroundColor.Value);
@@ -622,44 +743,24 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             var activeBuff = FindActiveAuraBuff(buffs, skill, auraName);
 
             var isActive = activeBuff != null;
-            var timerText = Settings.ShowAuraTimers.Value && isActive && activeBuff.MaxTime > 0 && activeBuff.MaxTime < 86400f
+            var timerText = Settings.ShowAuraTimers.Value && isActive && activeBuff.MaxTime > 0 && activeBuff.MaxTime < PermanentBuffTime
                 ? $" {activeBuff.Timer:F1}s"
                 : "";
-
-            var displayText = isActive
-                ? $"+ {auraName}{timerText}"
-                : $"- {auraName}";
-
-            var textSize = ImGui.CalcTextSize(displayText);
-
-            var pillPaddingX = 6f;
-            var pillPaddingY = 2f;
-            var pillRect = new RectangleF(
-                centerX - textSize.X / 2 - pillPaddingX,
-                startY + lineHeight * line - pillPaddingY,
-                textSize.X + pillPaddingX * 2,
-                textSize.Y + pillPaddingY * 2);
 
             var isSkillHighlighted = !string.IsNullOrWhiteSpace(auraName) &&
                 Settings.SkillFilter.Content.Any(x =>
                     !string.IsNullOrWhiteSpace(x.Value) &&
                     auraName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
 
-            Color textColor;
-            if (isActive)
-            {
-                Graphics.DrawBox(pillRect, new Color(Settings.AuraActiveColor.Value.R, Settings.AuraActiveColor.Value.G, Settings.AuraActiveColor.Value.B, (byte)40));
-                Graphics.DrawFrame(pillRect, Settings.AuraActiveColor.Value, 1);
-                textColor = Settings.AuraActiveColor.Value;
-            }
-            else
-            {
-                var color = isSkillHighlighted ? Settings.HighlightSkillColor.Value : Settings.AuraInactiveColor.Value;
-                Graphics.DrawBox(pillRect, new Color(color.R, color.G, color.B, (byte)20));
-                Graphics.DrawFrame(pillRect, color, 1);
-                textColor = color;
-            }
+            var displayText = isActive || isSkillHighlighted
+                ? $">> {auraName}{timerText} <<"
+                : $"- {auraName}";
 
+            var textColor = isActive
+                ? Settings.AuraActiveColor.Value
+                : isSkillHighlighted ? Settings.HighlightSkillColor.Value : Settings.AuraInactiveColor.Value;
+
+            var textSize = ImGui.CalcTextSize(displayText);
             var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
             Graphics.DrawTextWithBackground(displayText, drawPos, textColor, Settings.BackgroundColor.Value);
 
@@ -761,5 +862,229 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             );
         }
     }
+
+    private void DrawOffScreenIndicators()
+    {
+        if (!Settings.ShowOffScreenIndicators.Value) return;
+        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return;
+
+        var windowRect = GameController.Window.GetWindowRectangleTimeCache;
+        var center = new System.Numerics.Vector2(windowRect.X + windowRect.Width / 2f, windowRect.Y + windowRect.Height / 2f);
+
+        foreach (var mon in monsters)
+        {
+            if (mon.IsHostile) continue;
+            if (mon.DistancePlayer > Settings.MaxIndicatorDistance.Value) continue;
+            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
+
+            var screenPos = GameController.IngameState.Camera.WorldToScreen(mon.PosNum);
+            if (screenPos.X >= windowRect.X && screenPos.X <= windowRect.Right &&
+                screenPos.Y >= windowRect.Y && screenPos.Y <= windowRect.Bottom) continue;
+
+            var dir = screenPos - center;
+            if (dir.LengthSquared() < 1f) continue;
+            dir = System.Numerics.Vector2.Normalize(dir);
+
+            var target = ClipRayToRect(center, dir, windowRect, 42f);
+            if (target == null) continue;
+
+            var name = mon.RenderName;
+            var window = GameController.IngameState.IngameUi.MercenaryEncounterWindow;
+            var stats = GetIndicatorStats(mon, name, window);
+            var color = stats is { Count: > 0 }
+                ? GetColorForStat(stats[0])
+                : mon.Metadata.Contains("Allied", StringComparison.Ordinal)
+                    ? Settings.HpBarColor.Value
+                    : Settings.DefaultSkillColor.Value;
+
+            var tip = target.Value + dir * 12f;
+            var perp = new System.Numerics.Vector2(-dir.Y, dir.X);
+            Graphics.DrawConvexPolyFilled(
+                [tip, target.Value - dir * 8f + perp * 8f, target.Value - dir * 8f - perp * 8f],
+                color);
+
+            var label = string.IsNullOrWhiteSpace(name) ? "Mercenary" : name;
+            var cls = GetIndicatorClass(mon, name, window);
+            var lineHeight = ImGui.GetTextLineHeight();
+
+            var arrowBase = target.Value - dir * 12f;
+            var perp2 = new System.Numerics.Vector2(-dir.Y, dir.X) * 14f;
+            var drawX = arrowBase.X + perp2.X;
+            var drawY = arrowBase.Y + perp2.Y;
+
+            Graphics.DrawTextWithBackground(label, new System.Numerics.Vector2(drawX, drawY), Color.White, Settings.BackgroundColor.Value);
+
+            var distText = $"{mon.DistancePlayer:F0}m";
+            var subText = string.IsNullOrWhiteSpace(cls) ? distText : $"{cls}  {distText}";
+            Graphics.DrawTextWithBackground(subText,
+                new System.Numerics.Vector2(drawX, drawY + lineHeight), color, Settings.BackgroundColor.Value);
+        }
+    }
+
+    private static System.Numerics.Vector2? ClipRayToRect(System.Numerics.Vector2 origin, System.Numerics.Vector2 dir, RectangleF rect, float inset)
+    {
+        var minX = rect.X + inset;
+        var maxX = rect.Right - inset;
+        var minY = rect.Y + inset;
+        var maxY = rect.Bottom - inset;
+
+        float tMin = 0f;
+        float tMax = float.MaxValue;
+
+        if (Math.Abs(dir.X) > 1e-6f)
+        {
+            var t1 = (minX - origin.X) / dir.X;
+            var t2 = (maxX - origin.X) / dir.X;
+            if (t1 > t2) (t1, t2) = (t2, t1);
+            tMin = Math.Max(tMin, t1);
+            tMax = Math.Min(tMax, t2);
+        }
+        else if (origin.X < minX || origin.X > maxX) return null;
+
+        if (Math.Abs(dir.Y) > 1e-6f)
+        {
+            var t1 = (minY - origin.Y) / dir.Y;
+            var t2 = (maxY - origin.Y) / dir.Y;
+            if (t1 > t2) (t1, t2) = (t2, t1);
+            tMin = Math.Max(tMin, t1);
+            tMax = Math.Min(tMax, t2);
+        }
+        else if (origin.Y < minY || origin.Y > maxY) return null;
+
+        if (tMin > tMax || tMax < 0) return null;
+        return origin + dir * (tMin > 0 ? tMin : tMax);
+    }
+
+    private List<StatType> GetIndicatorStats(Entity mon, string name, Element window)
+    {
+        if (name != null)
+        {
+            var hardcoded = MercenaryStats.GetValueOrDefault(name);
+            if (hardcoded is { Count: > 0 }) return hardcoded;
+        }
+
+        if (mon.TryGetComponent<Stats>(out var statsComp) && GetStatInt(statsComp, GameStat.Level) > 0)
+        {
+            var live = GetMercStatTypes(mon, name);
+            if (live is { Count: > 0 }) return live;
+        }
+
+        if (window != null && window.IsVisible)
+        {
+            var fromWindow = FindWindowAttribute(window);
+            if (fromWindow is { Count: > 0 }) return fromWindow;
+        }
+
+        if (mon.TryGetComponent<Actor>(out var actor) && actor.ActorSkills != null)
+        {
+            var fromSkills = actor.ActorSkills
+                .Where(s => !string.IsNullOrWhiteSpace(s.Name))
+                .Select(s => GetSkillStatType(s, GetSkillDisplayName(s)))
+                .Where(a => a != null)
+                .GroupBy(a => a)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .Cast<StatType>()
+                .ToList();
+            if (fromSkills.Count > 0) return fromSkills;
+        }
+
+        return null;
+    }
+
+    private static readonly Dictionary<string, string> ClassByMetadata = new Dictionary<string, string>();
+
+    private static string GetMetadataClass(Entity mon)
+    {
+        var meta = mon.Metadata;
+        var slash = meta.LastIndexOf('/');
+        return slash >= 0 ? meta.Substring(slash + 1) : meta;
+    }
+
+    private string GetIndicatorClass(Entity mon, string name, Element window)
+    {
+        if (!string.IsNullOrWhiteSpace(name) && MercenaryStats.ContainsKey(name)) return name;
+
+        var metaClass = GetMetadataClass(mon);
+        if (ClassByMetadata.TryGetValue(metaClass, out var cached)) return cached;
+
+        if (window != null && window.IsVisible && !string.IsNullOrWhiteSpace(name))
+        {
+            var cls = FindOfferArchetype(window, name);
+            if (cls != null)
+            {
+                ClassByMetadata[metaClass] = cls;
+                return cls;
+            }
+        }
+
+        return null;
+    }
+
+    private static string FindOfferArchetype(Element window, string expectedName)
+    {
+        var texts = new List<string>();
+        void Walk(Element e, int depth)
+        {
+            if (e == null || depth > 6) return;
+            var t = e.Text?.Trim();
+            if (!string.IsNullOrEmpty(t) && t.Length < 60) texts.Add(t);
+            foreach (var c in e.Children) Walk(c, depth + 1);
+        }
+        foreach (var c in window.Children) Walk(c, 0);
+
+        var idx = texts.FindIndex(t => string.Equals(t, expectedName, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return null;
+
+        for (var i = idx + 1; i < texts.Count; i++)
+        {
+            var t = texts[i];
+            var tokens = t.Split(new[] { ' ', '/', '+', '&' }, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length > 0 && tokens.All(x => x is "Str" or "Dex" or "Int")) continue;
+            if (t.StartsWith("Lvl ", StringComparison.Ordinal) || t.StartsWith("Wager", StringComparison.Ordinal)) continue;
+            if (t.Length <= 24) return t;
+        }
+        return null;
+    }
+
+    private StatType? GetSkillStatType(ActorSkill skill, string skillName)
+    {
+        if (_skillAttributeMap.TryGetValue(skillName, out var attr)) return attr;
+        if (skill.IsCry) return StatType.Str;
+        if (skill.IsMine || skill.IsTrap) return StatType.Dex;
+        return null;
+    }
+
+    private static List<StatType> FindWindowAttribute(Element window)
+    {
+        var found = new List<StatType>(3);
+
+        void Scan(Element e, int depth)
+        {
+            if (e == null || depth > 6 || found.Count > 0) return;
+            var t = e.Text?.Trim();
+            if (!string.IsNullOrEmpty(t) && t.Length < 30)
+            {
+                var tokens = t.Split(new[] { ' ', '/', '+', '&' }, StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length > 0 && tokens.All(x => x is "Str" or "Dex" or "Int"))
+                {
+                    foreach (var token in tokens)
+                    {
+                        found.Add(token switch
+                        {
+                            "Str" => StatType.Str,
+                            "Dex" => StatType.Dex,
+                            _ => StatType.Int
+                        });
+                    }
+                }
+            }
+            foreach (var c in e.Children) Scan(c, depth + 1);
+        }
+
+        foreach (var c in window.Children) Scan(c, 0);
+        return found;
+    }
+
     #endregion
 }

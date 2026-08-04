@@ -11,6 +11,7 @@ namespace MercScanner;
 public class MercScannerSettingsDrawer
 {
     private readonly MercScannerSettings _settings;
+    private readonly MercScanner _plugin;
     private int _selectedTab;
     private string _activeSliderEditId;
     private readonly Dictionary<string, string> _sliderBuffers = new();
@@ -36,84 +37,53 @@ public class MercScannerSettingsDrawer
         ("Hired Mercs",    new(0.30f, 1.00f, 0.60f, 1f)),
     ];
 
-    private static readonly (string InternalName, string DisplayName)[] KnownAuraEntries =
-    [
-        ("anger", "Anger"),
-        ("wrath", "Wrath"),
-        ("hatred", "Hatred"),
-        ("determination", "Determination"),
-        ("grace", "Grace"),
-        ("discipline", "Discipline"),
-        ("haste", "Haste"),
-        ("malevolence", "Malevolence"),
-        ("pride", "Pride"),
-        ("zealotry", "Zealotry"),
-        ("clarity", "Clarity"),
-        ("vitality", "Vitality"),
-        ("precision", "Precision"),
-        ("envy", "Envy"),
-        ("purity_of_fire", "Purity of Fire"),
-        ("purity_of_ice", "Purity of Ice"),
-        ("purity_of_lightning", "Purity of Lightning"),
-        ("herald_of_ash", "Herald of Ash"),
-        ("herald_of_ice", "Herald of Ice"),
-        ("herald_of_thunder", "Herald of Thunder"),
-        ("herald_of_agony", "Herald of Agony"),
-        ("herald_of_purity", "Herald of Purity"),
-        ("aspect_of_the_spider", "Aspect of the Spider"),
-        ("aspect_of_the_avian", "Aspect of the Avian"),
-        ("aspect_of_the_crab", "Aspect of the Crab"),
-        ("aspect_of_the_cat", "Aspect of the Cat"),
-        ("war_banner", "War Banner"),
-        ("dread_banner", "Dread Banner"),
-        ("defiance_banner", "Defiance Banner"),
-        ("arctic_armour", "Arctic Armour"),
-        ("summon_skitterbots", "Summon Skitterbots"),
-        ("vaal_vitality", "Vaal Vitality"),
-    ];
-
     private static readonly string[] KnownAuraDisplayNames =
-        KnownAuraEntries.Select(e => e.DisplayName).ToArray();
+        MercScanner.KnownAuraEntries.Select(e => e.DisplayName).ToArray();
 
-    public MercScannerSettingsDrawer(MercScannerSettings settings)
+    public MercScannerSettingsDrawer(MercScanner plugin, MercScannerSettings settings)
     {
+        _plugin = plugin;
         _settings = settings;
     }
 
     public void Draw()
     {
         PushWindowStyle();
-
-        DrawGeneralSettings();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        var sidebarHeight = ImGui.GetContentRegionAvail().Y;
-        if (ImGui.BeginChild("Sidebar", new System.Numerics.Vector2(140f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
+        try
         {
-            for (var i = 0; i < TabData.Length; i++)
-                DrawTabSelector(TabData[i].Label, i, TabData[i].Color);
-        }
-        ImGui.EndChild();
+            DrawGeneralSettings();
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
 
-        ImGui.SameLine();
-
-        if (ImGui.BeginChild("Content", new System.Numerics.Vector2(ImGui.GetContentRegionAvail().X - 4f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
-        {
-            switch (_selectedTab)
+            var sidebarHeight = ImGui.GetContentRegionAvail().Y;
+            if (ImGui.BeginChild("Sidebar", new System.Numerics.Vector2(140f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
             {
-                case 0: DrawTiersTab(); break;
-                case 1: DrawUnhiredMercsTab(); break;
-                case 2: DrawFramesTab(); break;
-                case 3: DrawSkillsAurasTab(); break;
-                case 4: DrawHiredTab(); break;
+                for (var i = 0; i < TabData.Length; i++)
+                    DrawTabSelector(TabData[i].Label, i, TabData[i].Color);
             }
-        }
-        ImGui.EndChild();
+            ImGui.EndChild();
 
-        ImGui.PopStyleColor(20);
-        ImGui.PopStyleVar(9);
+            ImGui.SameLine();
+
+            if (ImGui.BeginChild("Content", new System.Numerics.Vector2(ImGui.GetContentRegionAvail().X - 4f, sidebarHeight), ImGuiChildFlags.Border, ImGuiWindowFlags.None))
+            {
+                switch (_selectedTab)
+                {
+                    case 0: DrawTiersTab(); break;
+                    case 1: DrawUnhiredMercsTab(); break;
+                    case 2: DrawFramesTab(); break;
+                    case 3: DrawSkillsAurasTab(); break;
+                    case 4: DrawHiredTab(); break;
+                }
+            }
+            ImGui.EndChild();
+        }
+        finally
+        {
+            ImGui.PopStyleColor(20);
+            ImGui.PopStyleVar(9);
+        }
     }
 
     private void DrawTabSelector(string label, int index, System.Numerics.Vector4 color)
@@ -145,6 +115,10 @@ public class MercScannerSettingsDrawer
         DrawColorNode("B Tier", _settings.BTierColor);
         DrawColorNode("C Tier", _settings.CTierColor);
 
+        if (ImGui.Button("Auto Assign Tiers From Live Data"))
+            _plugin.AutoAssignTiers();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Score visible mercenaries from their live stats and assign S/A/B/C automatically. Overwrites manual tiers.");
+
         ImGui.Separator();
         ImGui.TextDisabled("0=None  1=S  2=A  3=B  4=C");
         ImGui.Separator();
@@ -156,7 +130,7 @@ public class MercScannerSettingsDrawer
         if (_settings.ShowTierFrame.Value)
         {
             var opacity = _settings.TierFrameFillOpacity.Value;
-            if (ModernSlider("Fill Opacity", ref opacity, 0, 100))
+            if (DrawIntSlider("Fill Opacity", ref opacity, 0, 100))
                 _settings.TierFrameFillOpacity.Value = opacity;
         }
 
@@ -193,7 +167,7 @@ public class MercScannerSettingsDrawer
             foreach (var name in groupNames)
             {
                 var value = _settings.MercenaryTiers[name];
-                if (ModernSlider(name, ref value, 0, 4))
+                if (DrawIntSlider(name, ref value, 0, 4))
                     _settings.MercenaryTiers[name] = value;
             }
         }
@@ -212,10 +186,25 @@ public class MercScannerSettingsDrawer
         DrawToggleNode("Show Stat Rings", _settings.ShowEntityFrames);
         DrawToggleNode("Show Tier Label", _settings.ShowEntityTier);
         ImGui.Spacing();
+        DrawToggleNode("Infer Stats From Live Data", _settings.UseLiveStatInference);
+        DrawToggleNode("Show Level", _settings.ShowMercLevel);
+        ImGui.Spacing();
 
         var dist = _settings.MaxMercDistance.Value;
-        if (ModernSlider("Max Distance", ref dist, 10, 200))
+        if (DrawIntSlider("Max Distance", ref dist, 10, 200))
             _settings.MaxMercDistance.Value = dist;
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Text("Off-Screen Indicators");
+        ImGui.Separator();
+        DrawToggleNode("Off-Screen Indicators", _settings.ShowOffScreenIndicators);
+        if (_settings.ShowOffScreenIndicators.Value)
+        {
+            var indicatorDist = _settings.MaxIndicatorDistance.Value;
+            if (DrawIntSlider("Indicator Distance", ref indicatorDist, _settings.MaxIndicatorDistance.Min, _settings.MaxIndicatorDistance.Max))
+                _settings.MaxIndicatorDistance.Value = indicatorDist;
+        }
     }
 
     private void DrawFramesTab()
@@ -279,12 +268,7 @@ public class MercScannerSettingsDrawer
                 if (ImGui.Selectable(KnownAuraDisplayNames[i], isSelected))
                 {
                     _selectedAuraIndex = i;
-                    var displayName = KnownAuraDisplayNames[i];
-                    if (!_settings.SkillFilter.Content.Any(x =>
-                            x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
-                    {
-                        _settings.SkillFilter.Content.Add(new TextNode(displayName));
-                    }
+                    AddAuraToFilter(KnownAuraDisplayNames[i]);
                 }
                 if (isSelected) ImGui.SetItemDefaultFocus();
             }
@@ -293,17 +277,9 @@ public class MercScannerSettingsDrawer
         ImGui.PopItemWidth();
 
         ImGui.SameLine();
-        if (ImGui.Button("Add +"))
+        if (ImGui.Button("Add +") && _selectedAuraIndex >= 0 && _selectedAuraIndex < KnownAuraDisplayNames.Length)
         {
-            if (_selectedAuraIndex >= 0 && _selectedAuraIndex < KnownAuraDisplayNames.Length)
-            {
-                var displayName = KnownAuraDisplayNames[_selectedAuraIndex];
-                if (!_settings.SkillFilter.Content.Any(x =>
-                        x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
-                {
-                    _settings.SkillFilter.Content.Add(new TextNode(displayName));
-                }
-            }
+            AddAuraToFilter(KnownAuraDisplayNames[_selectedAuraIndex]);
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Add the selected aura to your filter list");
 
@@ -311,13 +287,7 @@ public class MercScannerSettingsDrawer
         if (ImGui.Button("Add All"))
         {
             foreach (var (_, displayName) in KnownAuraEntries)
-            {
-                if (!_settings.SkillFilter.Content.Any(x =>
-                        x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase)))
-                {
-                    _settings.SkillFilter.Content.Add(new TextNode(displayName));
-                }
-            }
+                AddAuraToFilter(displayName);
         }
 
         ImGui.Spacing();
@@ -326,6 +296,13 @@ public class MercScannerSettingsDrawer
             _settings.SkillFilter.Content.Clear();
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove all filter entries");
+    }
+
+    private void AddAuraToFilter(string displayName)
+    {
+        if (_settings.SkillFilter.Content.Any(x =>
+                x.Value.Equals(displayName, StringComparison.InvariantCultureIgnoreCase))) return;
+        _settings.SkillFilter.Content.Add(new TextNode(displayName));
     }
 
     private void DrawToggleNode(string label, ToggleNode node)
@@ -351,6 +328,7 @@ public class MercScannerSettingsDrawer
         DrawToggleNode("Show ES Bar", _settings.ShowHiredMercEsBar);
         ImGui.Spacing();
         DrawToggleNode("Show Action Panel", _settings.ShowHiredMercActionPanel);
+        DrawToggleNode("Show Filtered Buffs", _settings.ShowHiredMercBuffs);
     }
 
     private void DrawContentNode(string label, ContentNode<TextNode> node)
@@ -377,13 +355,13 @@ public class MercScannerSettingsDrawer
             node.Content.Add(new TextNode(""));
     }
 
-    private bool ModernSlider(string id, ref int value, int min, int max)
+    private bool DrawIntSlider(string id, ref int value, int min, int max)
     {
         if (_activeSliderEditId == id)
             return HandleSliderTextInput(id, ref value, min, max);
 
         var floatValue = (float)value;
-        if (!ModernSliderFloat(id, ref floatValue, min, max, out var valueClicked))
+        if (!DrawSliderCore(id, ref floatValue, min, max, out var valueClicked))
         {
             if (valueClicked)
             {
@@ -432,7 +410,7 @@ public class MercScannerSettingsDrawer
         return (uint)(a * 255) << 24 | (uint)(b * 255) << 16 | (uint)(g * 255) << 8 | (uint)(r * 255);
     }
 
-    private bool ModernSliderFloat(string id, ref float value, float min, float max, out bool valueClicked)
+    private bool DrawSliderCore(string id, ref float value, float min, float max, out bool valueClicked)
     {
         valueClicked = false;
         var labelSize = ImGui.CalcTextSize(id);

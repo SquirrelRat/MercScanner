@@ -58,4 +58,11 @@ public class MercScannerSettings : ISettings
     public ToggleNode ShowHiredMercHpBar { get; set; } = new ToggleNode(true);
     public ToggleNode ShowHiredMercEsBar { get; set; } = new ToggleNode(true);
     public ToggleNode ShowHiredMercActionPanel { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowHiredMercBuffs { get; set; } = new ToggleNode(false);
+
+    public ToggleNode UseLiveStatInference { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowMercLevel { get; set; } = new ToggleNode(true);
+
+    public ToggleNode ShowOffScreenIndicators { get; set; } = new ToggleNode(false);
+    public RangeNode<int> MaxIndicatorDistance { get; set; } = new RangeNode<int>(500, 50, 5000);
 }
