@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Windows.Forms;
 using ExileCore.Shared.Helpers;
 using ExileCore.Shared.Interfaces;
 using ExileCore.Shared.Nodes;
@@ -45,9 +46,7 @@ public class MercScannerSettings : ISettings
 
     public ToggleNode ShowEntityOverlays { get; set; } = new ToggleNode(true);
     public ToggleNode ShowHpBar { get; set; } = new ToggleNode(true);
-    public ToggleNode ShowEsBar { get; set; } = new ToggleNode(true);
     public ColorNode HpBarColor { get; set; } = new ColorNode(System.Drawing.Color.LawnGreen.ToSharpDx());
-    public ColorNode EsBarColor { get; set; } = new ColorNode(System.Drawing.Color.DodgerBlue.ToSharpDx());
     public ToggleNode ShowEntityFrames { get; set; } = new ToggleNode(true);
     public ToggleNode ShowEntityTier { get; set; } = new ToggleNode(true);
     public RangeNode<int> MaxMercDistance { get; set; } = new RangeNode<int>(80, 10, 200);
@@ -56,8 +55,9 @@ public class MercScannerSettings : ISettings
 
     public ToggleNode ShowHiredMercOverlays { get; set; } = new ToggleNode(true);
     public ToggleNode ShowHiredMercHpBar { get; set; } = new ToggleNode(true);
-    public ToggleNode ShowHiredMercEsBar { get; set; } = new ToggleNode(true);
     public ToggleNode ShowHiredMercActionPanel { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowSkillCooldowns { get; set; } = new ToggleNode(true);
+    public RangeNode<int> SkillCooldownBarStyle { get; set; } = new RangeNode<int>(2, 0, 2);
     public ToggleNode ShowHiredMercBuffs { get; set; } = new ToggleNode(false);
 
     public ToggleNode UseLiveStatInference { get; set; } = new ToggleNode(true);
@@ -65,4 +65,20 @@ public class MercScannerSettings : ISettings
 
     public ToggleNode ShowOffScreenIndicators { get; set; } = new ToggleNode(false);
     public RangeNode<int> MaxIndicatorDistance { get; set; } = new RangeNode<int>(500, 50, 5000);
+
+    public ToggleNode ShowLinkStatus { get; set; } = new ToggleNode(true);
+    public ColorNode LinkedColor { get; set; } = new ColorNode(System.Drawing.Color.Yellow.ToSharpDx());
+    public ColorNode UnlinkedColor { get; set; } = new ColorNode(System.Drawing.Color.Red.ToSharpDx());
+
+    public ToggleNode AutoCastFlameLink { get; set; } = new ToggleNode(false);
+    public HotkeyNodeV2 FlameLinkKey { get; set; } = new HotkeyNodeV2(Keys.None);
+    public ToggleNode RequireSkillReady { get; set; } = new ToggleNode(true);
+    public RangeNode<int> CastMarginMs { get; set; } = new RangeNode<int>(50, 0, 500);
+    public RangeNode<int> CastGapMs { get; set; } = new RangeNode<int>(400, 50, 3000);
+    public RangeNode<int> CursorSettleMs { get; set; } = new RangeNode<int>(60, 10, 300);
+    public RangeNode<int> CursorRestoreMs { get; set; } = new RangeNode<int>(40, 0, 300);
+    public ToggleNode RestoreCursor { get; set; } = new ToggleNode(true);
+    public RangeNode<float> MaxCastDistance { get; set; } = new RangeNode<float>(100f, 10f, 1000f);
+    public ToggleNode DontCastInTown { get; set; } = new ToggleNode(true);
+    public ToggleNode DontCastWithPanelsOpen { get; set; } = new ToggleNode(true);
 }

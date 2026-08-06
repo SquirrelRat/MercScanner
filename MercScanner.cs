@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ExileCore;
@@ -17,10 +17,14 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 {
     private MercScannerSettingsDrawer _settingsDrawer;
     private Dictionary<string, StatType?> _skillAttributeMap;
+    private FlameLinkController _flameLink;
+
+    internal FlameLinkController FlameLink => _flameLink;
 
     #region Data
     internal enum StatType { Str, Dex, Int }
     internal enum MercTier { None = 0, S = 1, A = 2, B = 3, C = 4 }
+    internal enum CooldownBarStyle { Inline = 0, BelowText = 1, FillBackground = 2 }
     internal static readonly Dictionary<string, List<StatType>> MercenaryStats = InitializeMercStats();
     internal static readonly string[] MercenaryKeysSorted = [.. MercenaryStats.Keys.OrderByDescending(k => k.Length)];
 
@@ -67,6 +71,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     #endregion
 
     #region Helpers
+    private static bool IsDisplayableSkill(ActorSkill skill) =>
+        skill.Name is not null and not "" and not "Move" and not "EASMercenaryPortalOut";
+
     private static string GetSkillDisplayName(ActorSkill skill)
     {
         var effects = skill.EffectsPerLevel;
@@ -197,6 +204,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     public override bool Initialise()
     {
         _settingsDrawer = new MercScannerSettingsDrawer(this, Settings);
+        _flameLink = new FlameLinkController(this);
 
         _skillAttributeMap = new Dictionary<string, StatType?>(StringComparer.OrdinalIgnoreCase);
         try
@@ -232,7 +240,27 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return true;
     }
 
-    public override Job Tick() => null;
+    public override Job Tick()
+    {
+        _flameLink?.Update(GetHiredMercs());
+        return null;
+    }
+
+    private List<Entity> GetHiredMercs()
+    {
+        var hired = new List<Entity>();
+        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return hired;
+
+        foreach (var mon in monsters)
+        {
+            if (mon.IsHostile) continue;
+            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
+            if (!mon.Metadata.Contains("Allied", StringComparison.Ordinal)) continue;
+            hired.Add(mon);
+        }
+
+        return hired;
+    }
 
     public void AutoAssignTiers()
     {
@@ -446,7 +474,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             {
                 if (!Settings.ShowHiredMercOverlays.Value) continue;
 
-                if (Settings.ShowMercLevel.Value && level is { } hiredLevel)
+                if (Settings.ShowLinkStatus.Value)
+                    DrawLevelAndLinkStatus(centerX, mon, level, merScreenPos.Y, lineHeight);
+                else if (Settings.ShowMercLevel.Value && level is { } hiredLevel)
                     DrawTextAbove(centerX, $"Lvl {hiredLevel}", Settings.DefaultSkillColor.Value, merScreenPos.Y, lineHeight);
 
                 if (life != null)
@@ -454,8 +484,6 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                     var barY = merScreenPos.Y;
                     if (Settings.ShowHiredMercHpBar.Value && life.MaxHP > 0)
                         barY = DrawSimpleBar(centerX, barY, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
-                    if (Settings.ShowHiredMercEsBar.Value && life.MaxES > 0)
-                        barY = DrawSimpleBar(centerX, barY, life.CurES, life.MaxES, Settings.EsBarColor.Value, barHeight);
                 }
 
                 if (actor != null && Settings.ShowHiredMercActionPanel.Value)
@@ -487,8 +515,6 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                     var barY = merScreenPos.Y;
                     if (Settings.ShowHpBar.Value && life.MaxHP > 0)
                         barY = DrawSimpleBar(centerX, barY, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
-                    if (Settings.ShowEsBar.Value && life.MaxES > 0)
-                        barY = DrawSimpleBar(centerX, barY, life.CurES, life.MaxES, Settings.EsBarColor.Value, barHeight);
                 }
 
                 if (buffs != null)
@@ -516,76 +542,39 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return drawPos.Y;
     }
 
+    private void DrawLevelAndLinkStatus(float centerX, Entity mon, int? level, float currentTop, float lineHeight)
+    {
+        var linked = _flameLink != null && _flameLink.IsLinked(mon);
+        var linkText = linked ? "Linked" : "Unlinked";
+        var linkColor = linked ? Settings.LinkedColor.Value : Settings.UnlinkedColor.Value;
+
+        var levelText = Settings.ShowMercLevel.Value && level is { } hiredLevel ? $"Lvl {hiredLevel}" : "";
+        var levelSize = string.IsNullOrEmpty(levelText) ? default : ImGui.CalcTextSize(levelText);
+        var linkSize = ImGui.CalcTextSize(linkText);
+
+        const float gap = 6f;
+        var totalWidth = levelSize.X + (levelSize.X > 0 ? gap : 0) + linkSize.X;
+        var startX = centerX - totalWidth / 2;
+        var rowY = currentTop - Math.Max(levelSize.Y, linkSize.Y) - 2;
+
+        var levelPos = new System.Numerics.Vector2(startX, rowY);
+        var linkPos = new System.Numerics.Vector2(startX + levelSize.X + (levelSize.X > 0 ? gap : 0), rowY);
+
+        if (levelSize.X > 0)
+            Graphics.DrawTextWithBackground(levelText, levelPos, Settings.DefaultSkillColor.Value, Settings.BackgroundColor.Value);
+
+        Graphics.DrawTextWithBackground(linkText, linkPos, linkColor, Settings.BackgroundColor.Value);
+    }
+
     private void DrawHiredMercActionPanel(Actor actor, Buffs buffs, float centerX, float startY, float lineHeight)
     {
         var line = 0;
-
-        var usingSkill = (actor.Action & ActionFlags.UsingAbility) != 0;
-        var isMoving = (actor.Action & ActionFlags.Moving) != 0 && !usingSkill;
-
-        if (usingSkill && actor.CurrentAction?.Skill != null)
-        {
-            var skillName = GetSkillDisplayName(actor.CurrentAction.Skill);
-            var text = $"> {skillName}";
-            var textSize = ImGui.CalcTextSize(text);
-            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY);
-            var textRect = new RectangleF(drawPos.X - 2, drawPos.Y - 1, textSize.X + 4, textSize.Y + 2);
-            Graphics.DrawFrame(textRect, new Color(0.2f, 1.0f, 0.4f, 1f), 1);
-            Graphics.DrawTextWithBackground(text, drawPos, new Color(0.2f, 1.0f, 0.4f, 1f), Settings.BackgroundColor.Value);
-            line++;
-        }
-        else if (isMoving)
-        {
-            var text = "- Moving...";
-            var textSize = ImGui.CalcTextSize(text);
-            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY);
-            Graphics.DrawTextWithBackground(text, drawPos, new Color(0.6f, 0.6f, 0.6f, 1f), Settings.BackgroundColor.Value);
-            line++;
-        }
 
         if (actor.ActorSkills != null)
         {
             foreach (var skill in actor.ActorSkills)
             {
-                if (skill.Name is null or "Move" or "EASMercenaryPortalOut") continue;
-                if (skill.IsUsing || skill.IsChanneling) continue;
-                if (!skill.IsOnCooldown) continue;
-
-                var skillName = GetSkillDisplayName(skill);
-                var cooldownInfo = skill.CooldownInfo?.SkillCooldowns is { Count: > 0 }
-                    ? skill.CooldownInfo.SkillCooldowns[0] : null;
-
-                var cdRemaining = cooldownInfo?.Remaining ?? skill.Cooldown;
-                var cdTotal = skill.Cooldown;
-                var cdText = cooldownInfo != null
-                    ? $" [{cooldownInfo.Remaining:F1}s]"
-                    : skill.Cooldown > 0 ? $" [{skill.Cooldown:F1}s]" : " [cd]";
-
-                var text = $"{skillName}{cdText}";
-                var textSize = ImGui.CalcTextSize(text);
-                var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-                Graphics.DrawTextWithBackground(text, drawPos, new Color(0.5f, 0.5f, 0.5f, 1f), Settings.BackgroundColor.Value);
-
-                const float cdBarWidth = 100f;
-                const float cdBarHeight = 4f;
-                var barY = drawPos.Y + textSize.Y + 2;
-                var barX = centerX - cdBarWidth / 2;
-                var barRect = new RectangleF(barX, barY, cdBarWidth, cdBarHeight);
-                Graphics.DrawBox(barRect, new Color(0, 0, 0, 140));
-
-                if (cdTotal > 0)
-                {
-                    var fill = Math.Clamp(1f - (float)cdRemaining / cdTotal, 0f, 1f);
-                    var fillRect = new RectangleF(barX, barY, cdBarWidth * fill, cdBarHeight);
-                    Graphics.DrawBox(fillRect, new Color(0.3f, 0.7f, 1f, 0.8f));
-                }
-
-                line++;
-            }
-
-            foreach (var skill in actor.ActorSkills)
-            {
-                if (skill.Name is null or "Move" or "EASMercenaryPortalOut") continue;
+                if (!IsDisplayableSkill(skill)) continue;
                 if (skill.IsUsing || skill.IsChanneling || skill.IsOnCooldown) continue;
 
                 var auraName = GetSkillDisplayName(skill);
@@ -608,6 +597,73 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 Graphics.DrawTextWithBackground(text, drawPos, color, Settings.BackgroundColor.Value);
                 line++;
             }
+
+            if (Settings.ShowSkillCooldowns.Value)
+            {
+                foreach (var skill in actor.ActorSkills)
+                {
+                    if (!IsDisplayableSkill(skill)) continue;
+                    if (skill.IsChanneling) continue;
+                    if (!skill.IsOnCooldown) continue;
+
+                    var skillName = GetSkillDisplayName(skill);
+                    var cooldownInfo = skill.CooldownInfo?.SkillCooldowns is { Count: > 0 }
+                        ? skill.CooldownInfo.SkillCooldowns[0] : null;
+
+                    var cdRemaining = Math.Max(0f, cooldownInfo?.Remaining ?? skill.Cooldown);
+                    var cdTotal = skill.Cooldown;
+                    var cdText = cooldownInfo != null
+                        ? $" [{cdRemaining:F1}s]"
+                        : skill.Cooldown > 0 ? $" [{skill.Cooldown:F1}s]" : " [cd]";
+
+                    var text = $"{skillName}{cdText}";
+                    var textSize = ImGui.CalcTextSize(text);
+                    var rowY = startY + lineHeight * line;
+
+                    var remainingFraction = cdTotal > 0
+                        ? Math.Clamp((float)cdRemaining / cdTotal, 0f, 1f)
+                        : 1f;
+
+                    switch ((CooldownBarStyle)Settings.SkillCooldownBarStyle.Value)
+                    {
+                        case CooldownBarStyle.BelowText:
+                            DrawCooldownBarBelow(centerX, rowY, text, textSize, remainingFraction);
+                            line += 2;
+                            break;
+                        case CooldownBarStyle.FillBackground:
+                            DrawCooldownBarFill(centerX, rowY, text, textSize, remainingFraction);
+                            line++;
+                            break;
+                        default:
+                            DrawCooldownBarInline(centerX, rowY, text, textSize, remainingFraction);
+                            line++;
+                            break;
+                    }
+                }
+            }
+        }
+
+        var usingSkill = (actor.Action & ActionFlags.UsingAbility) != 0;
+        var isMoving = (actor.Action & ActionFlags.Moving) != 0 && !usingSkill;
+
+        if (usingSkill && actor.CurrentAction?.Skill != null)
+        {
+            var skillName = GetSkillDisplayName(actor.CurrentAction.Skill);
+            var text = $"> {skillName}";
+            var textSize = ImGui.CalcTextSize(text);
+            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
+            var textRect = new RectangleF(drawPos.X - 2, drawPos.Y - 1, textSize.X + 4, textSize.Y + 2);
+            Graphics.DrawFrame(textRect, new Color(0.2f, 1.0f, 0.4f, 1f), 1);
+            Graphics.DrawTextWithBackground(text, drawPos, new Color(0.2f, 1.0f, 0.4f, 1f), Settings.BackgroundColor.Value);
+            line++;
+        }
+        else if (isMoving)
+        {
+            var text = "- Moving...";
+            var textSize = ImGui.CalcTextSize(text);
+            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
+            Graphics.DrawTextWithBackground(text, drawPos, new Color(0.6f, 0.6f, 0.6f, 1f), Settings.BackgroundColor.Value);
+            line++;
         }
 
         if (Settings.ShowHiredMercBuffs.Value && buffs?.BuffsList != null)
@@ -630,6 +686,65 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 Graphics.DrawTextWithBackground(text, drawPos, Settings.AuraActiveColor.Value, Settings.BackgroundColor.Value);
                 line++;
             }
+        }
+    }
+
+    private void DrawCooldownBarInline(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
+    {
+        const float cdBarWidth = 64f;
+        const float cdBarHeight = 8f;
+        const float textBarGap = 6f;
+        var rowWidth = textSize.X + textBarGap + cdBarWidth;
+        var rowX = centerX - rowWidth / 2;
+
+        var drawPos = new System.Numerics.Vector2(rowX, rowY);
+        Graphics.DrawTextWithBackground(text, drawPos, new Color(0.35f, 0.8f, 0.45f, 1f), Settings.BackgroundColor.Value);
+
+        var barX = rowX + textSize.X + textBarGap;
+        var barY = rowY + (textSize.Y - cdBarHeight) / 2;
+        DrawCdBar(new RectangleF(barX, barY, cdBarWidth, cdBarHeight), remainingFraction);
+    }
+
+    private void DrawCooldownBarBelow(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
+    {
+        const float cdBarWidth = 120f;
+        const float cdBarHeight = 8f;
+
+        var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, rowY);
+        Graphics.DrawTextWithBackground(text, drawPos, new Color(0.35f, 0.8f, 0.45f, 1f), Settings.BackgroundColor.Value);
+
+        var barX = centerX - cdBarWidth / 2;
+        var barY = rowY + textSize.Y + 3;
+        DrawCdBar(new RectangleF(barX, barY, cdBarWidth, cdBarHeight), remainingFraction);
+    }
+
+    private void DrawCooldownBarFill(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
+    {
+        const float padding = 1f;
+        var bgRect = new RectangleF(centerX - textSize.X / 2 - padding, rowY - padding, textSize.X + padding * 2, textSize.Y + padding * 2);
+        Graphics.DrawBox(bgRect, new Color(0, 0, 0, 200));
+
+        if (remainingFraction > 0f)
+        {
+            var fillRect = new RectangleF(bgRect.X, bgRect.Y, bgRect.Width * remainingFraction, bgRect.Height);
+            Graphics.DrawBox(fillRect, new Color(0.25f, 0.55f, 0.85f, 0.5f));
+        }
+
+        Graphics.DrawFrame(bgRect, new Color(0.35f, 0.55f, 0.75f, 0.9f), 1);
+
+        var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, rowY);
+        Graphics.DrawTextWithBackground(text, drawPos, new Color(1f, 1f, 1f, 1f), new Color(0, 0, 0, 0));
+    }
+
+    private void DrawCdBar(RectangleF barRect, float remainingFraction)
+    {
+        Graphics.DrawBox(barRect, new Color(0, 0, 0, 180));
+        Graphics.DrawFrame(barRect, new Color(0.35f, 0.55f, 0.75f, 0.9f), 1);
+
+        if (remainingFraction > 0f)
+        {
+            var fillRect = new RectangleF(barRect.X, barRect.Y, barRect.Width * remainingFraction, barRect.Height);
+            Graphics.DrawBox(fillRect, new Color(0.3f, 0.7f, 1f, 0.9f));
         }
     }
 
@@ -692,10 +807,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         var line = 0;
 
         if (actor.ActorSkills == null) return startY;
-        foreach (var skill in actor.ActorSkills.Where(x => !string.IsNullOrWhiteSpace(x.Name)))
+        foreach (var skill in actor.ActorSkills.Where(IsDisplayableSkill))
         {
-            if (skill.Name is "Move" or "EASMercenaryPortalOut") continue;
-
             var skillName = GetSkillDisplayName(skill);
 
             var isSkillHighlighted = !string.IsNullOrWhiteSpace(skillName) &&
@@ -732,10 +845,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         if (actor.ActorSkills == null) return;
         var line = 0;
 
-        foreach (var skill in actor.ActorSkills.Where(x => !string.IsNullOrWhiteSpace(x.Name)))
+        foreach (var skill in actor.ActorSkills.Where(IsDisplayableSkill))
         {
-            if (skill.Name is "Move" or "EASMercenaryPortalOut") continue;
-
             var auraName = GetSkillDisplayName(skill);
 
             if (!IsAuraFilterMatch(skill, auraName, skill.EffectsPerLevel)) continue;

@@ -35,6 +35,7 @@ public class MercScannerSettingsDrawer
         ("Frames",         new(0.50f, 0.70f, 0.90f, 1f)),
         ("Skills & Auras", new(0.45f, 0.65f, 0.85f, 1f)),
         ("Hired Mercs",    new(0.30f, 1.00f, 0.60f, 1f)),
+        ("Flame Link",     new(1.00f, 0.60f, 0.30f, 1f)),
     ];
 
     private static readonly string[] KnownAuraDisplayNames =
@@ -75,6 +76,7 @@ public class MercScannerSettingsDrawer
                     case 2: DrawFramesTab(); break;
                     case 3: DrawSkillsAurasTab(); break;
                     case 4: DrawHiredTab(); break;
+                    case 5: DrawFlameLinkTab(); break;
                 }
             }
             ImGui.EndChild();
@@ -178,10 +180,8 @@ public class MercScannerSettingsDrawer
         DrawToggleNode("Enable Entity Overlays", _settings.ShowEntityOverlays);
         ImGui.Spacing();
         DrawToggleNode("Show HP Bar", _settings.ShowHpBar);
-        DrawToggleNode("Show ES Bar", _settings.ShowEsBar);
         ImGui.Spacing();
         DrawColorNode("HP Bar Color", _settings.HpBarColor);
-        DrawColorNode("ES Bar Color", _settings.EsBarColor);
         ImGui.Spacing();
         DrawToggleNode("Show Stat Rings", _settings.ShowEntityFrames);
         DrawToggleNode("Show Tier Label", _settings.ShowEntityTier);
@@ -325,10 +325,97 @@ public class MercScannerSettingsDrawer
         DrawToggleNode("Enable Hired Merc Overlays", _settings.ShowHiredMercOverlays);
         ImGui.Spacing();
         DrawToggleNode("Show HP Bar", _settings.ShowHiredMercHpBar);
-        DrawToggleNode("Show ES Bar", _settings.ShowHiredMercEsBar);
         ImGui.Spacing();
         DrawToggleNode("Show Action Panel", _settings.ShowHiredMercActionPanel);
+        DrawToggleNode("Show Skill Cooldowns", _settings.ShowSkillCooldowns);
+        if (_settings.ShowSkillCooldowns.Value)
+        {
+            var style = _settings.SkillCooldownBarStyle.Value;
+            if (DrawBarStyleCombo(ref style))
+                _settings.SkillCooldownBarStyle.Value = style;
+        }
         DrawToggleNode("Show Filtered Buffs", _settings.ShowHiredMercBuffs);
+    }
+
+    private void DrawFlameLinkTab()
+    {
+        if (ImGui.CollapsingHeader("Link Status", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawToggleNode("Show Link Status", _settings.ShowLinkStatus);
+            DrawColorNode("Linked Color", _settings.LinkedColor);
+            DrawColorNode("Unlinked Color", _settings.UnlinkedColor);
+        }
+
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("Auto-Cast", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawToggleNode("Auto-Cast Flame Link", _settings.AutoCastFlameLink);
+            if (_settings.AutoCastFlameLink.Value)
+            {
+                ImGui.Spacing();
+                _settings.FlameLinkKey.DrawPickerButton("Link Key");
+                DrawToggleNode("Wait For Skill Ready", _settings.RequireSkillReady);
+                DrawToggleNode("Restore Cursor", _settings.RestoreCursor);
+
+                ImGui.Spacing();
+                var settle = _settings.CursorSettleMs.Value;
+                if (DrawIntSlider("Cursor Settle (ms)", ref settle, _settings.CursorSettleMs.Min, _settings.CursorSettleMs.Max))
+                    _settings.CursorSettleMs.Value = settle;
+
+                var restore = _settings.CursorRestoreMs.Value;
+                if (DrawIntSlider("Cursor Restore (ms)", ref restore, _settings.CursorRestoreMs.Min, _settings.CursorRestoreMs.Max))
+                    _settings.CursorRestoreMs.Value = restore;
+
+                var margin = _settings.CastMarginMs.Value;
+                if (DrawIntSlider("Cast Margin (ms)", ref margin, _settings.CastMarginMs.Min, _settings.CastMarginMs.Max))
+                    _settings.CastMarginMs.Value = margin;
+
+                var gap = _settings.CastGapMs.Value;
+                if (DrawIntSlider("Cast Gap Fallback (ms)", ref gap, _settings.CastGapMs.Min, _settings.CastGapMs.Max))
+                    _settings.CastGapMs.Value = gap;
+
+                var distance = _settings.MaxCastDistance.Value;
+                if (DrawFloatSlider("Max Cast Distance", ref distance, _settings.MaxCastDistance.Min, _settings.MaxCastDistance.Max))
+                    _settings.MaxCastDistance.Value = distance;
+
+                ImGui.Spacing();
+                DrawToggleNode("Never Cast In Town", _settings.DontCastInTown);
+                DrawToggleNode("Never Cast With Panels Open", _settings.DontCastWithPanelsOpen);
+
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.TextWrapped(_plugin.FlameLink != null
+                    ? $"Status: {_plugin.FlameLink.BlockedReason} | gap: {_plugin.FlameLink.CastGapMs} ms | casts: {_plugin.FlameLink.CastCount}"
+                    : "Status: not initialized");
+            }
+        }
+    }
+
+    private static readonly string[] BarStyleLabels = ["Inline", "Below Text", "Fill Background"];
+
+    private bool DrawBarStyleCombo(ref int style)
+    {
+        var preview = BarStyleLabels[Math.Clamp(style, 0, BarStyleLabels.Length - 1)];
+        ImGui.Text("Cooldown Bar Style");
+        ImGui.SameLine();
+        ImGui.PushItemWidth(180f);
+        var changed = false;
+        if (ImGui.BeginCombo("##cdBarStyle", preview))
+        {
+            for (var i = 0; i < BarStyleLabels.Length; i++)
+            {
+                var isSelected = style == i;
+                if (ImGui.Selectable(BarStyleLabels[i], isSelected))
+                {
+                    style = i;
+                    changed = true;
+                }
+                if (isSelected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+        return changed;
     }
 
     private void DrawContentNode(string label, ContentNode<TextNode> node)
@@ -353,6 +440,11 @@ public class MercScannerSettingsDrawer
 
         if (ImGui.Button($"Add item##{label}Add"))
             node.Content.Add(new TextNode(""));
+    }
+
+    private bool DrawFloatSlider(string id, ref float value, float min, float max)
+    {
+        return DrawSliderCore(id, ref value, min, max, out _);
     }
 
     private bool DrawIntSlider(string id, ref int value, int min, int max)
