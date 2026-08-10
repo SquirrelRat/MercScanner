@@ -26,15 +26,14 @@ public class FlameLinkController
     private readonly Stopwatch _phaseClock = Stopwatch.StartNew();
     private readonly Stopwatch _sinceLastCast = Stopwatch.StartNew();
 
-    // After we cast at a merc, treat it as freshly linked for this long even if
-    // its buff read momentarily flaps. This is the real anti-spam: the link is
-    // applied by our own cast, and the buff list on a merc can briefly read
-    // empty, which must not trigger a recast. Distinct from CastGapMs (the
-    // global pacing between casts): this is the per-merc window during which a
-    // just-cast merc is not considered for another cast.
     private int CastLockoutMs => _plugin.Settings.RelinkCooldownMs.Value;
 
     private readonly Dictionary<uint, long> _lastCastByMerc = new();
+
+    private readonly List<Entity> _aliveScratch = new();
+    private readonly List<Entity> _inRangeScratch = new();
+    private readonly HashSet<uint> _activeIdsScratch = new();
+    private readonly List<uint> _staleIdsScratch = new();
 
     private CastPhase _phase = CastPhase.Idle;
     private System.Numerics.Vector2 _cursorBeforeCast;
@@ -85,28 +84,21 @@ public class FlameLinkController
         StartCast(target);
     }
 
+    private bool RecentlyCast(uint mercId) =>
+        _lastCastByMerc.TryGetValue(mercId, out var lastCast) &&
+        Environment.TickCount64 - lastCast < CastLockoutMs;
+
     public bool IsLinked(Entity merc)
     {
         if (merc is not { IsValid: true }) return false;
 
-        // A buff list we cannot read is treated as linked: on zone change the
-        // buffs of a merc can briefly read empty for a few frames, and casting
-        // into that flap is exactly what caused the recast spam.
         if (!merc.TryGetComponent<Buffs>(out var buffs) || buffs?.BuffsList == null) return true;
 
-        // After we cast at a merc, the link is applied by our own cast. The
-        // buff read can flap empty for a few frames afterwards; that must not
-        // be read as "unlinked" or we would recast into our own success.
-        if (_lastCastByMerc.TryGetValue(merc.Id, out var lastCast) &&
-            Environment.TickCount64 - lastCast < CastLockoutMs)
-            return true;
+        if (RecentlyCast(merc.Id)) return true;
 
         return HasLinkBuff(merc);
     }
 
-    // True only when the link buff is actually present on the merc. Unlike
-    // IsLinked, this never fabricates "linked" from an unreadable buff list,
-    // so it can be used to identify the true holder during target selection.
     private bool HasLinkBuff(Entity merc)
     {
         if (!merc.TryGetComponent<Buffs>(out var buffs) || buffs?.BuffsList == null) return false;
@@ -124,12 +116,8 @@ public class FlameLinkController
         return false;
     }
 
-    // A merc counts as the active holder if it shows the link buff, or if we
-    // just cast at it and the buff has not had time to register yet.
     private bool HoldsActiveLink(Entity merc) =>
-        HasLinkBuff(merc) ||
-        (_lastCastByMerc.TryGetValue(merc.Id, out var lastCast) &&
-         Environment.TickCount64 - lastCast < CastLockoutMs);
+        HasLinkBuff(merc) || RecentlyCast(merc.Id);
 
     public int EffectiveGapMs
     {
@@ -264,16 +252,23 @@ public class FlameLinkController
     {
         if (_lastCastByMerc.Count == 0 && _linkedMercId == null) return;
 
-        var active = new HashSet<uint>(mercs.Select(m => m.Id));
-        var now = Environment.TickCount64;
-        var stale = _lastCastByMerc.Keys
-            .Where(id => !active.Contains(id) || now - _lastCastByMerc[id] >= CastLockoutMs)
-            .ToList();
-        foreach (var id in stale) _lastCastByMerc.Remove(id);
+        _activeIdsScratch.Clear();
+        foreach (var m in mercs)
+        {
+            if (m is { IsValid: true, IsAlive: true })
+                _activeIdsScratch.Add(m.Id);
+        }
 
-        // If the merc we are tracking as linked is no longer present at all,
-        // the link is free — let a fresh target be chosen.
-        if (_linkedMercId != null && !active.Contains(_linkedMercId.Value))
+        var now = Environment.TickCount64;
+        _staleIdsScratch.Clear();
+        foreach (var (id, lastCast) in _lastCastByMerc)
+        {
+            if (!_activeIdsScratch.Contains(id) || now - lastCast >= CastLockoutMs)
+                _staleIdsScratch.Add(id);
+        }
+        foreach (var id in _staleIdsScratch) _lastCastByMerc.Remove(id);
+
+        if (_linkedMercId != null && !_activeIdsScratch.Contains(_linkedMercId.Value))
             _linkedMercId = null;
     }
 
@@ -281,51 +276,61 @@ public class FlameLinkController
     {
         var maxDistance = _plugin.Settings.MaxCastDistance.Value;
 
-        // The link holder must be found across ALL alive mercs, not just the
-        // ones in cast range: a linked merc that walked out of range is still
-        // linked, and re-targeting another merc would steal the single Flame
-        // Link (ping-pong).
-        var alive = mercs
-            .Where(m => m is { IsValid: true, IsAlive: true })
-            .ToList();
+        _aliveScratch.Clear();
+        foreach (var m in mercs)
+        {
+            if (m is { IsValid: true, IsAlive: true })
+                _aliveScratch.Add(m);
+        }
 
-        var currentlyLinked = alive.FirstOrDefault(HoldsActiveLink);
+        var currentlyLinked = _aliveScratch.FirstOrDefault(HoldsActiveLink);
         if (currentlyLinked != null)
             _linkedMercId = currentlyLinked.Id;
 
-        // The tracked merc despawned (zone change, gone) — the link is free.
-        if (_linkedMercId != null && !alive.Any(m => m.Id == _linkedMercId.Value))
+        if (_linkedMercId != null && !_aliveScratch.Any(m => m.Id == _linkedMercId.Value))
             _linkedMercId = null;
 
-        var inRange = maxDistance <= 0
-            ? alive
-            : alive.Where(m => m.DistancePlayer <= maxDistance).ToList();
+        _inRangeScratch.Clear();
+        if (maxDistance <= 0)
+        {
+            _inRangeScratch.AddRange(_aliveScratch);
+        }
+        else
+        {
+            foreach (var m in _aliveScratch)
+            {
+                if (m.DistancePlayer <= maxDistance)
+                    _inRangeScratch.Add(m);
+            }
+        }
 
         if (_linkedMercId != null)
         {
-            var tracked = alive.FirstOrDefault(m => m.Id == _linkedMercId.Value);
-            var trackedInRange = inRange.Any(m => m.Id == _linkedMercId.Value);
+            var tracked = _aliveScratch.FirstOrDefault(m => m.Id == _linkedMercId.Value);
+            var trackedInRange = _inRangeScratch.Any(m => m.Id == _linkedMercId.Value);
 
             if (tracked == null || (!IsLinked(tracked) && !trackedInRange))
             {
-                // The tracked merc is gone entirely, or dropped the link while
-                // out of cast range — the link is free, pick a fresh target.
                 _linkedMercId = null;
             }
             else
             {
-                // Still holds the link (or is in range): only ever re-link that
-                // same merc if it dropped it. Never touch the others, or we
-                // would ping-pong the single Flame Link target between all
-                // hired mercs.
                 return trackedInRange && !IsLinked(tracked) ? tracked : null;
             }
         }
 
-        // Nothing is linked yet: establish the link on the nearest merc.
-        return inRange
-            .OrderBy(m => m.DistancePlayer)
-            .FirstOrDefault(m => TryGetScreenPos(m, out _));
+        Entity nearest = null;
+        var nearestDistance = float.MaxValue;
+        foreach (var m in _inRangeScratch)
+        {
+            if (!TryGetScreenPos(m, out _)) continue;
+            if (m.DistancePlayer < nearestDistance)
+            {
+                nearest = m;
+                nearestDistance = m.DistancePlayer;
+            }
+        }
+        return nearest;
     }
 
     private void StartCast(Entity target)
@@ -342,7 +347,6 @@ public class FlameLinkController
 
     private void AbortCast()
     {
-        // Never leave the link key held down, and always restore the cursor.
         if (LinkKey is { } key && Input.GetKeyState(key))
             Input.KeyUp(key);
         if (_plugin.Settings.RestoreCursor.Value)
@@ -354,13 +358,8 @@ public class FlameLinkController
     {
         var settings = _plugin.Settings;
 
-        // Re-check the environment on every frame of the cast: if a menu,
-        // escape overlay, panel, chat window or death happens while the cursor
-        // is parked on a merc and the link key is about to go down, abort
-        // instead of pressing the key into an unsafe state.
         if (EnvironmentUnsafe(out var abortReason))
         {
-            // Never leave the link key held down, no matter which phase aborts.
             AbortCast();
             BlockedReason = abortReason;
             return;
@@ -396,7 +395,6 @@ public class FlameLinkController
                 return;
 
             case CastPhase.Releasing:
-                // Let the release settle, then make sure it really is up.
                 if (_phaseClock.ElapsedMilliseconds < settings.CursorRestoreMs.Value) return;
 
                 if (LinkKey is { } verifyKey && Input.GetKeyState(verifyKey))

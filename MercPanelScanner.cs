@@ -9,18 +9,11 @@ using SharpDX;
 
 namespace MercScanner;
 
-// Reads the mercenary offer window (MercenaryEncounterWindow) UI tree to recover the
-// offered merc's skills and their support gems. Supports only exist in this window's
-// tooltip elements — the entity's ActorSkills memory carries no support links at all.
 public sealed class MercPanelScanner
 {
-    // Verified geometry of a skill row inside the offer window: 539x44, name text on
-    // the left, support gem icons (~41x40) stacked in a right-hand strip.
     private const float RowWidth = 539f;
     private const float RowHeight = 44f;
 
-    // Walking the window subtree faults a lot of memory; refresh it a few times a second
-    // rather than every frame.
     private const int RefreshMs = 250;
 
     public sealed record SupportGem(string Name, RectangleF Rect);
@@ -44,7 +37,7 @@ public sealed class MercPanelScanner
         {
             _cachedWindow = null;
             _cachedRows = null;
-            return null;
+            return Array.Empty<SkillRow>();
         }
 
         if (!ReferenceEquals(window, _cachedWindow) || _cachedRows == null || _cacheAge.ElapsedMilliseconds > RefreshMs)
@@ -106,8 +99,6 @@ public sealed class MercPanelScanner
         }
     }
 
-    // First text-bearing descendant (or the element itself), trimmed. Tooltips expose
-    // their title as the first text node under them, so this doubles as the name reader.
     private static string FirstText(Element root, int depth)
     {
         if (root == null || !root.IsValid) return null;

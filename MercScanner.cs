@@ -93,18 +93,63 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private bool MatchesBadFilter(string text) =>
         MatchesAny(Settings.BadSkillFilter, text);
 
-    private static bool MatchesAny(List<string> list, string text) =>
-        !string.IsNullOrWhiteSpace(text) &&
-        list.Any(x =>
+    internal static readonly Dictionary<string, string> MercenarySkillAliases = new()
+    {
+        ["Icicle Rain"] = "Blast Rain",
+    };
+
+    private static string ExpandAlias(string text)
+    {
+        if (MercenarySkillAliases.TryGetValue(text, out var alias)) return alias;
+        foreach (var (key, value) in MercenarySkillAliases)
+        {
+            if (value.Equals(text, StringComparison.InvariantCultureIgnoreCase)) return key;
+        }
+        return text;
+    }
+
+    private static bool MatchesAny(List<string> list, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var alias = ExpandAlias(text);
+        return list.Any(x =>
             !string.IsNullOrWhiteSpace(x) &&
-            text.Contains(x, StringComparison.InvariantCultureIgnoreCase));
+            (text.Contains(x, StringComparison.InvariantCultureIgnoreCase) ||
+             alias.Contains(x, StringComparison.InvariantCultureIgnoreCase)));
+    }
 
     private static string GetSkillDisplayName(ActorSkill skill)
     {
         var effects = skill.EffectsPerLevel;
-        var displayName = effects?.SkillGemWrapper?.ActiveSkill?.DisplayName
-                          ?? effects?.SkillGemWrapper?.Name;
+        var active = effects?.SkillGemWrapper?.ActiveSkill;
+
+        var displayName = active?.DisplayName ?? effects?.SkillGemWrapper?.Name;
+        if (IsUsableDisplayName(displayName))
+            return StripMercenarySuffix(displayName);
+
+        var internalName = active?.InternalName;
+        if (!string.IsNullOrWhiteSpace(internalName))
+            return HumanizeInternalName(internalName);
+
         return StripMercenarySuffix(string.IsNullOrWhiteSpace(displayName) ? skill.Name : displayName);
+    }
+
+    private static bool IsUsableDisplayName(string name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        !name.Contains("[DNT]", StringComparison.OrdinalIgnoreCase) &&
+        !name.StartsWith("[", StringComparison.Ordinal);
+
+    private static string HumanizeInternalName(string internalName)
+    {
+        var words = internalName.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        var builder = new System.Text.StringBuilder();
+        foreach (var word in words)
+        {
+            if (builder.Length > 0) builder.Append(' ');
+            builder.Append(char.ToUpperInvariant(word[0]) + word[1..]);
+        }
+        return builder.ToString();
     }
 
     private static int GetStatInt(Stats stats, GameStat stat)
@@ -164,14 +209,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             return !string.IsNullOrWhiteSpace(sn) &&
                    sn.Contains(skill.Name, StringComparison.InvariantCultureIgnoreCase);
         });
-        if (bySourceSkill != null) return bySourceSkill;
-
-        var byKeyword = buffs.BuffsList.FirstOrDefault(b =>
-        {
-            var bn = b.DisplayName ?? b.Name;
-            return !string.IsNullOrWhiteSpace(bn) && MatchesFilter(bn);
-        });
-        return byKeyword;
+        return bySourceSkill;
     }
     #endregion
 
@@ -371,20 +409,36 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         if (!Settings.HighlightEncounterPanelBorders.Value) return;
 
         var rows = _panelScanner.Read();
-        if (rows == null) return;
-
         foreach (var row in rows)
         {
             var skillColor = BorderColorFor(row.Name);
             if (skillColor != null)
                 Graphics.DrawFrame(row.Rect, skillColor.Value, 2);
 
+            var isBadSkill = MatchesBadFilter(row.Name);
+
             foreach (var support in row.Supports)
             {
+                if (isBadSkill) continue;
+
                 var tier = ResolveSupportRating(row.Name, support.Name);
-                Graphics.DrawFrame(support.Rect, TierColor(tier), 2);
+                if (tier == null) continue;
+
+                var tierColor = TierColor(tier.Value);
+                Graphics.DrawFrame(support.Rect, tierColor, 2);
+                DrawSupportTierLetter(support.Rect, tier.Value, tierColor);
             }
         }
+    }
+
+    private void DrawSupportTierLetter(RectangleF gemRect, SupportTier tier, Color tierColor)
+    {
+        var letter = TierLetter(tier);
+        var letterSize = ImGui.CalcTextSize(letter);
+        var drawPos = new System.Numerics.Vector2(
+            gemRect.X + gemRect.Width - letterSize.X - 2,
+            gemRect.Y + 1);
+        Graphics.DrawTextWithBackground(letter, drawPos, tierColor, Settings.BackgroundColor.Value);
     }
 
     private Color? BorderColorFor(string name)
@@ -584,8 +638,6 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         var height = Math.Max(markerSize.Y, nameSize.Y);
         var x = centerX - totalWidth / 2;
 
-        // One background behind the whole marker+name row so there is no empty
-        // strip of background between the "+"/"-" glyph and the skill name.
         var bgRect = new RectangleF(x - padding, y - padding, totalWidth + padding * 2, height + padding * 2);
         Graphics.DrawBox(bgRect, Settings.BackgroundColor.Value);
 
@@ -885,7 +937,6 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 continue;
             }
 
-            // Neutral skill (or an inline aura when the aura display is not separated).
             var labeledName = skillName;
             var showHighlight = isAura && !Settings.SeparateAuraDisplay.Value;
             if (showHighlight) labeledName = $">> {skillName} <<";

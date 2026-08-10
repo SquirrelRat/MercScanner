@@ -7,9 +7,6 @@ using ImGuiNET;
 
 namespace MercScanner;
 
-// Tabbed settings page, drawn entirely from DrawSettings() instead of ExileCore's [Menu] auto-drawer.
-// Nothing here is stored on the settings object, so no delegate ever gets serialized — the old
-// CustomNode.DrawDelegate approach is what crashed SaveSettings with a self-referencing loop.
 public partial class MercScanner
 {
     public override void DrawSettings()
@@ -183,8 +180,8 @@ public partial class MercScanner
         DrawQuickAdd(ref _badSelectedAuraIndex, Settings.BadSkillFilter, AddBadAuraToFilter, "##badAura");
         DrawFilterListEditor("##badInput", Settings.BadSkillFilter, ref _badSkillFilterInput, AddBadSkillFilterEntry, "Add Bad Skill");
 
-        Section("Support Ratings (gradient)");
-        ImGui.TextWrapped("Support gems in the mercenary offer window get a frame coloured by how good the support is for the skill it's linked to. Combo-specific ratings override the support's global rating.");
+        Section("Support Ratings (S/A/B/C/D)");
+        ImGui.TextWrapped("Support gems in the mercenary offer window get a border and tier letter for how good the support is on the skill it's linked to. Combo-specific ratings override the support's global rating; unrated supports get nothing.");
         foreach (var tier in AllSupportTiers)
         {
             var c = TierColor(tier);
@@ -193,9 +190,9 @@ public partial class MercScanner
                 new Vector2(pos.X, pos.Y + 3), new Vector2(pos.X + 14, pos.Y + 17),
                 ImGui.GetColorU32(new Vector4(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f)), 2);
             ImGui.SetCursorScreenPos(new Vector2(pos.X + 20, pos.Y));
-            ImGui.Text(tier.ToString());
+            ImGui.Text($"{TierLetter(tier)} ({tier})");
         }
-        ImGui.Text($"{Settings.SupportRatings.Count} rated supports, {Settings.SupportSkillOverrides.Count} combo overrides. Unrated supports stay grey.");
+        ImGui.Text($"{Settings.SupportRatings.Count} rated supports, {Settings.SupportSkillOverrides.Count} combo overrides.");
     }
 
     private void DrawQuickAdd(ref int selectedIndex, List<string> targetList, Action<string> addAura, string id)

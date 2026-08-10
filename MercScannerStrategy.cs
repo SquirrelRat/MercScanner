@@ -3,15 +3,10 @@ using System.Collections.Generic;
 
 namespace MercScanner;
 
-// Curated "auto-assigned strategy" preset, researched against the 3.29 Curse of
-// the Allflame meta (official patch notes, poedb, reddit r/pathofexile and
-// r/PathOfExileBuilds, mobalytics merc-bot guide, Odealo merc guide). Apply with
-// the "Load Auto-Assigned Strategy" button in the Tiers settings tab.
 public partial class MercScanner
 {
     internal static readonly string[] DefaultGoodSkills =
     [
-        // Auras (highest-value first — reservation-heavy ones shine on a merc)
         "Hatred",
         "Grace",
         "Haste",
@@ -27,19 +22,16 @@ public partial class MercScanner
         "Vitality",
         "Summon Skitterbots",
         "Purity of Ice",
-        // Curses
         "Elemental Weakness",
         "Despair",
         "Conductivity",
         "Flammability",
         "Assassin's Mark",
         "Temporal Chains",
-        // Utility / damage skills
         "Sigil of Power",
         "Flame Wall",
         "Void Sphere",
         "Wither",
-        // 3.29-relevant archetype damage skills (Trarthan gems were buffed in 3.29.0)
         "Kinetic Blast of Clustering",
         "Ice Shot",
         "Vaal Ice Shot",
@@ -52,13 +44,9 @@ public partial class MercScanner
 
     internal static readonly string[] DefaultBadSkills =
     [
-        // Known bad picks on mercs (3.29 testing): Kinetic Bolt bricks the
-        // Kineticist AI so it stops using Kinetic Blast of Clustering; Icicle
-        // Rain deals poor damage and interrupts Vaal Ice Shot on Manyshot.
         "Kinetic Bolt",
+        "Blast Rain",
         "Icicle Rain",
-        // Movement skills — 3.29.0 patched merc AI to not spam them, but they can
-        // still mess with positioning, so keep them as a soft negative.
         "Dash",
         "Flame Dash",
         "Whirling Blades",
@@ -67,8 +55,6 @@ public partial class MercScanner
         "Frostblink",
     ];
 
-    // Base archetype tiers from community tier lists. "Infamous X" variants are
-    // auto-derived one tier higher (S stays S). Archetypes not listed stay None.
     internal static readonly Dictionary<string, MercTier> DefaultArchetypeTiers = new()
     {
         ["Kineticist"] = MercTier.S,
@@ -90,177 +76,152 @@ public partial class MercScanner
         ["Flamehand"] = MercTier.C,
     };
 
-    // Curated gradient ratings for support gems (3.29 meta research). Keyed by the
-    // support gem's display name; anything not listed falls back to Neutral. Combo
-    // nuances (a support that is perfect on one skill and a brick on another) live
-    // in DefaultSupportSkillOverrides.
     internal static readonly Dictionary<string, int> DefaultSupportRatings = new()
     {
-        // Core damage multipliers — great almost everywhere on a merc
-        ["Elemental Damage with Attacks"] = (int)SupportTier.Great,
-        ["Greater Elemental Damage with Attacks"] = (int)SupportTier.Perfect,
-        ["Melee Physical Damage"] = (int)SupportTier.Good,
-        ["Greater Melee Physical Damage"] = (int)SupportTier.Great,
-        ["Physical as Extra"] = (int)SupportTier.Good,
-        ["Greater Physical as Extra"] = (int)SupportTier.Great,
-        ["Physical as Extra Chaos"] = (int)SupportTier.Good,
-        ["Greater Physical as Extra Chaos"] = (int)SupportTier.Great,
-        ["Critical Chance"] = (int)SupportTier.Good,
-        ["Greater Critical Chance"] = (int)SupportTier.Great,
-        ["Critical Damage"] = (int)SupportTier.Good,
-        ["Greater Critical Damage"] = (int)SupportTier.Great,
-        ["Concentrated Effect"] = (int)SupportTier.Good,
-        ["Greater Concentrated Effect"] = (int)SupportTier.Great,
-        ["Pulverise"] = (int)SupportTier.Good,
-        ["Greater Pulverise"] = (int)SupportTier.Great,
-        ["Multistrike"] = (int)SupportTier.Good,
-        ["Greater Multistrike"] = (int)SupportTier.Great,
-        ["Elemental Focus"] = (int)SupportTier.Good,
-        ["Greater Elemental Focus"] = (int)SupportTier.Great,
-        ["Faster Attacks"] = (int)SupportTier.Good,
-        ["Greater Faster Attacks"] = (int)SupportTier.Great,
-        ["Faster Casting"] = (int)SupportTier.Good,
-        ["Greater Faster Casting"] = (int)SupportTier.Great,
-        ["Cooldown Recovery"] = (int)SupportTier.Good,
-        ["Greater Cooldown Recovery"] = (int)SupportTier.Great,
-        // Projectile/clear tools
-        ["Multiple Projectiles"] = (int)SupportTier.Great,
-        ["Greater Multiple Projectiles"] = (int)SupportTier.Perfect,
-        ["Return"] = (int)SupportTier.Great,
-        ["Chain"] = (int)SupportTier.Good,
-        ["Greater Chain"] = (int)SupportTier.Great,
-        ["Pierce"] = (int)SupportTier.Good,
-        ["Greater Pierce"] = (int)SupportTier.Great,
-        ["Fork"] = (int)SupportTier.Good,
-        ["Greater Fork"] = (int)SupportTier.Great,
-        ["Slower Projectiles"] = (int)SupportTier.Good,
-        ["Greater Slower Projectiles"] = (int)SupportTier.Great,
-        ["Faster Projectiles"] = (int)SupportTier.Good,
-        ["Greater Faster Projectiles"] = (int)SupportTier.Great,
-        ["Arrow Nova"] = (int)SupportTier.Good,
-        ["Added Cold"] = (int)SupportTier.Good,
-        ["Greater Added Cold"] = (int)SupportTier.Great,
-        ["Added Fire"] = (int)SupportTier.Good,
-        ["Greater Added Fire"] = (int)SupportTier.Great,
-        ["Added Lightning"] = (int)SupportTier.Good,
-        ["Greater Added Lightning"] = (int)SupportTier.Great,
-        ["Added Chaos"] = (int)SupportTier.Good,
-        ["Greater Added Chaos"] = (int)SupportTier.Great,
-        ["Cold Penetration"] = (int)SupportTier.Good,
-        ["Greater Cold Penetration"] = (int)SupportTier.Great,
-        ["Fire Penetration"] = (int)SupportTier.Good,
-        ["Greater Fire Penetration"] = (int)SupportTier.Great,
-        ["Lightning Penetration"] = (int)SupportTier.Good,
-        ["Greater Lightning Penetration"] = (int)SupportTier.Great,
-        ["Chaos Penetration"] = (int)SupportTier.Good,
-        ["Greater Chaos Penetration"] = (int)SupportTier.Great,
-        ["Hypothermia"] = (int)SupportTier.Good,
-        ["Greater Hypothermia"] = (int)SupportTier.Great,
-        // Traps / mines / totems
-        ["Trap and Mine Damage"] = (int)SupportTier.Good,
-        ["Greater Trap and Mine Damage"] = (int)SupportTier.Great,
-        ["Multiple Traps"] = (int)SupportTier.Good,
-        ["Multiple Totems"] = (int)SupportTier.Good,
-        ["Throwing Speed"] = (int)SupportTier.Good,
-        ["Greater Throwing Speed"] = (int)SupportTier.Great,
-        // Physical / bleed / impale
-        ["Maim"] = (int)SupportTier.Good,
-        ["Impale Chance"] = (int)SupportTier.Good,
-        ["Greater Impale Chance"] = (int)SupportTier.Great,
-        ["Chance to Bleed"] = (int)SupportTier.Good,
-        ["Greater Chance to Bleed"] = (int)SupportTier.Great,
-        // DoT / ailment
-        ["DoT Multiplier"] = (int)SupportTier.Good,
-        ["Greater DoT Multiplier"] = (int)SupportTier.Great,
-        ["Swift Affliction"] = (int)SupportTier.Good,
-        ["Greater Swift Affliction"] = (int)SupportTier.Great,
-        ["Wither on Hit"] = (int)SupportTier.Good,
-        ["Greater Wither on Hit"] = (int)SupportTier.Great,
-        ["Mirage Archer"] = (int)SupportTier.Good,
-        ["Ailment Damage"] = (int)SupportTier.Good,
-        ["Greater Ailment Damage"] = (int)SupportTier.Great,
-        // Minion mercs
-        ["Minion Damage"] = (int)SupportTier.Good,
-        ["Greater Minion Damage"] = (int)SupportTier.Great,
-        ["Minion Life"] = (int)SupportTier.Good,
-        ["Greater Minion Life"] = (int)SupportTier.Great,
-        ["Minion Caustic Death"] = (int)SupportTier.Good,
-        // Utility
-        ["Generosity"] = (int)SupportTier.Good,
-        ["Greater Generosity"] = (int)SupportTier.Great,
-        ["Second Wind"] = (int)SupportTier.Good,
-        ["Fortify"] = (int)SupportTier.Good,
-        ["Greater Fortify"] = (int)SupportTier.Great,
-        ["More Duration"] = (int)SupportTier.Good,
-        ["Greater More Duration"] = (int)SupportTier.Great,
-        ["Warcry Speed"] = (int)SupportTier.Good,
-        ["Greater Warcry Speed"] = (int)SupportTier.Great,
-        ["Raging Cry"] = (int)SupportTier.Good,
-        ["Greater Raging Cry"] = (int)SupportTier.Great,
-        ["Infused Channelling"] = (int)SupportTier.Good,
-        ["Greater Infused Channelling"] = (int)SupportTier.Great,
-        // Consistently poor or brick-tier picks on mercs
-        ["Deadly Ailments"] = (int)SupportTier.Bad,
-        ["Knockback"] = (int)SupportTier.Poor,
-        ["Less Duration"] = (int)SupportTier.Poor,
-        ["Ironwood"] = (int)SupportTier.Poor,
-        ["Greater Ironwood"] = (int)SupportTier.Poor,
-        ["Ailment Effect"] = (int)SupportTier.Poor,
-        ["Greater Ailment Effect"] = (int)SupportTier.Poor,
-        ["Brittle Chance"] = (int)SupportTier.Poor,
-        ["Shock Chance"] = (int)SupportTier.Poor,
-        ["Greater Shock Chance"] = (int)SupportTier.Poor,
-        ["Freeze Chance"] = (int)SupportTier.Poor,
-        ["Greater Freeze Chance"] = (int)SupportTier.Poor,
-        ["Ignite Chance"] = (int)SupportTier.Poor,
-        ["Greater Ignite Chance"] = (int)SupportTier.Poor,
-        ["Chance to Poison"] = (int)SupportTier.Poor,
-        ["Greater Chance to Poison"] = (int)SupportTier.Poor,
-        ["Rage on Hit"] = (int)SupportTier.Poor,
-        ["Greater Rage on Hit"] = (int)SupportTier.Poor,
-        ["Brutality"] = (int)SupportTier.Neutral,
+        ["Elemental Damage with Attacks"] = (int)SupportTier.A,
+        ["Greater Elemental Damage with Attacks"] = (int)SupportTier.S,
+        ["Melee Physical Damage"] = (int)SupportTier.B,
+        ["Greater Melee Physical Damage"] = (int)SupportTier.A,
+        ["Physical as Extra"] = (int)SupportTier.B,
+        ["Greater Physical as Extra"] = (int)SupportTier.A,
+        ["Physical as Extra Chaos"] = (int)SupportTier.B,
+        ["Greater Physical as Extra Chaos"] = (int)SupportTier.A,
+        ["Critical Chance"] = (int)SupportTier.B,
+        ["Greater Critical Chance"] = (int)SupportTier.A,
+        ["Critical Damage"] = (int)SupportTier.B,
+        ["Greater Critical Damage"] = (int)SupportTier.A,
+        ["Concentrated Effect"] = (int)SupportTier.B,
+        ["Greater Concentrated Effect"] = (int)SupportTier.A,
+        ["Pulverise"] = (int)SupportTier.B,
+        ["Greater Pulverise"] = (int)SupportTier.A,
+        ["Multistrike"] = (int)SupportTier.B,
+        ["Greater Multistrike"] = (int)SupportTier.A,
+        ["Elemental Focus"] = (int)SupportTier.B,
+        ["Greater Elemental Focus"] = (int)SupportTier.A,
+        ["Faster Attacks"] = (int)SupportTier.B,
+        ["Greater Faster Attacks"] = (int)SupportTier.A,
+        ["Faster Casting"] = (int)SupportTier.B,
+        ["Greater Faster Casting"] = (int)SupportTier.A,
+        ["Cooldown Recovery"] = (int)SupportTier.B,
+        ["Greater Cooldown Recovery"] = (int)SupportTier.A,
+        ["Multiple Projectiles"] = (int)SupportTier.A,
+        ["Greater Multiple Projectiles"] = (int)SupportTier.S,
+        ["Return"] = (int)SupportTier.A,
+        ["Chain"] = (int)SupportTier.B,
+        ["Greater Chain"] = (int)SupportTier.A,
+        ["Pierce"] = (int)SupportTier.B,
+        ["Greater Pierce"] = (int)SupportTier.A,
+        ["Fork"] = (int)SupportTier.B,
+        ["Greater Fork"] = (int)SupportTier.A,
+        ["Slower Projectiles"] = (int)SupportTier.B,
+        ["Greater Slower Projectiles"] = (int)SupportTier.A,
+        ["Faster Projectiles"] = (int)SupportTier.B,
+        ["Greater Faster Projectiles"] = (int)SupportTier.A,
+        ["Arrow Nova"] = (int)SupportTier.B,
+        ["Added Cold"] = (int)SupportTier.B,
+        ["Greater Added Cold"] = (int)SupportTier.A,
+        ["Added Fire"] = (int)SupportTier.B,
+        ["Greater Added Fire"] = (int)SupportTier.A,
+        ["Added Lightning"] = (int)SupportTier.B,
+        ["Greater Added Lightning"] = (int)SupportTier.A,
+        ["Added Chaos"] = (int)SupportTier.B,
+        ["Greater Added Chaos"] = (int)SupportTier.A,
+        ["Cold Penetration"] = (int)SupportTier.B,
+        ["Greater Cold Penetration"] = (int)SupportTier.A,
+        ["Fire Penetration"] = (int)SupportTier.B,
+        ["Greater Fire Penetration"] = (int)SupportTier.A,
+        ["Lightning Penetration"] = (int)SupportTier.B,
+        ["Greater Lightning Penetration"] = (int)SupportTier.A,
+        ["Chaos Penetration"] = (int)SupportTier.B,
+        ["Greater Chaos Penetration"] = (int)SupportTier.A,
+        ["Hypothermia"] = (int)SupportTier.B,
+        ["Greater Hypothermia"] = (int)SupportTier.A,
+        ["Trap and Mine Damage"] = (int)SupportTier.B,
+        ["Greater Trap and Mine Damage"] = (int)SupportTier.A,
+        ["Multiple Traps"] = (int)SupportTier.B,
+        ["Multiple Totems"] = (int)SupportTier.B,
+        ["Throwing Speed"] = (int)SupportTier.B,
+        ["Greater Throwing Speed"] = (int)SupportTier.A,
+        ["Maim"] = (int)SupportTier.B,
+        ["Impale Chance"] = (int)SupportTier.B,
+        ["Greater Impale Chance"] = (int)SupportTier.A,
+        ["Chance to Bleed"] = (int)SupportTier.B,
+        ["Greater Chance to Bleed"] = (int)SupportTier.A,
+        ["DoT Multiplier"] = (int)SupportTier.B,
+        ["Greater DoT Multiplier"] = (int)SupportTier.A,
+        ["Swift Affliction"] = (int)SupportTier.B,
+        ["Greater Swift Affliction"] = (int)SupportTier.A,
+        ["Wither on Hit"] = (int)SupportTier.B,
+        ["Greater Wither on Hit"] = (int)SupportTier.A,
+        ["Mirage Archer"] = (int)SupportTier.B,
+        ["Ailment Damage"] = (int)SupportTier.B,
+        ["Greater Ailment Damage"] = (int)SupportTier.A,
+        ["Minion Damage"] = (int)SupportTier.B,
+        ["Greater Minion Damage"] = (int)SupportTier.A,
+        ["Minion Life"] = (int)SupportTier.B,
+        ["Greater Minion Life"] = (int)SupportTier.A,
+        ["Minion Caustic Death"] = (int)SupportTier.B,
+        ["Generosity"] = (int)SupportTier.B,
+        ["Greater Generosity"] = (int)SupportTier.A,
+        ["Second Wind"] = (int)SupportTier.B,
+        ["Fortify"] = (int)SupportTier.B,
+        ["Greater Fortify"] = (int)SupportTier.A,
+        ["More Duration"] = (int)SupportTier.B,
+        ["Greater More Duration"] = (int)SupportTier.A,
+        ["Warcry Speed"] = (int)SupportTier.B,
+        ["Greater Warcry Speed"] = (int)SupportTier.A,
+        ["Raging Cry"] = (int)SupportTier.B,
+        ["Greater Raging Cry"] = (int)SupportTier.A,
+        ["Infused Channelling"] = (int)SupportTier.B,
+        ["Greater Infused Channelling"] = (int)SupportTier.A,
+        ["Deadly Ailments"] = (int)SupportTier.D,
+        ["Knockback"] = (int)SupportTier.C,
+        ["Less Duration"] = (int)SupportTier.C,
+        ["Ironwood"] = (int)SupportTier.C,
+        ["Greater Ironwood"] = (int)SupportTier.C,
+        ["Ailment Effect"] = (int)SupportTier.C,
+        ["Greater Ailment Effect"] = (int)SupportTier.C,
+        ["Brittle Chance"] = (int)SupportTier.C,
+        ["Shock Chance"] = (int)SupportTier.C,
+        ["Greater Shock Chance"] = (int)SupportTier.C,
+        ["Freeze Chance"] = (int)SupportTier.C,
+        ["Greater Freeze Chance"] = (int)SupportTier.C,
+        ["Ignite Chance"] = (int)SupportTier.C,
+        ["Greater Ignite Chance"] = (int)SupportTier.C,
+        ["Chance to Poison"] = (int)SupportTier.C,
+        ["Greater Chance to Poison"] = (int)SupportTier.C,
+        ["Rage on Hit"] = (int)SupportTier.C,
+        ["Greater Rage on Hit"] = (int)SupportTier.C,
     };
 
-    // Combo-specific ratings: "SkillName|SupportName" -> tier. These override the
-    // global rating when the same support appears under that skill, because a
-    // support can be a perfect fit on one skill and actively brick another.
     internal static readonly Dictionary<string, int> DefaultSupportSkillOverrides = new()
     {
-        // Kineticist: Returning Projectiles / Multiple Projectiles make Kinetic
-        // Blast of Clustering the best-in-slot clear setup.
-        ["Kinetic Blast of Clustering|Return"] = (int)SupportTier.Perfect,
-        ["Kinetic Blast of Clustering|Multiple Projectiles"] = (int)SupportTier.Great,
-        ["Kinetic Blast of Clustering|Greater Multiple Projectiles"] = (int)SupportTier.Perfect,
-        // Manyshot: Ice Shot / Vaal Ice Shot love Returning Projectiles.
-        ["Ice Shot|Return"] = (int)SupportTier.Perfect,
-        ["Ice Shot|Elemental Damage with Attacks"] = (int)SupportTier.Great,
-        ["Vaal Ice Shot|Return"] = (int)SupportTier.Perfect,
-        ["Vaal Ice Shot|Cooldown Recovery"] = (int)SupportTier.Great,
-        // Blade Ambusher: Spectral Helix of Trarthus trap setup.
-        ["Spectral Helix of Trarthus|Multiple Traps"] = (int)SupportTier.Perfect,
-        ["Spectral Helix of Trarthus|Trap and Mine Damage"] = (int)SupportTier.Great,
-        ["Spectral Helix of Trarthus|Slower Projectiles"] = (int)SupportTier.Good,
-        // Combatant: Static Strike / Frost Blades clear tools.
-        ["Static Strike|Elemental Damage with Attacks"] = (int)SupportTier.Great,
-        ["Static Strike|More Duration"] = (int)SupportTier.Great,
-        ["Static Strike|Chain"] = (int)SupportTier.Good,
-        ["Frost Blades|Return"] = (int)SupportTier.Perfect,
-        ["Frost Blades|Elemental Damage with Attacks"] = (int)SupportTier.Great,
-        ["Frost Blades|Chain"] = (int)SupportTier.Good,
-        ["Frost Blades|Hypothermia"] = (int)SupportTier.Great,
-        ["Frost Blades|Cold Penetration"] = (int)SupportTier.Good,
-        // Eruptor: flame link / warcry merc.
-        ["Vigilant Strike|Gilded Fortification"] = (int)SupportTier.Perfect,
-        ["Volcanic Fissure of Snaking|Gilded Additional Fissures"] = (int)SupportTier.Great,
-        // Brutality bricks chaos / conversion skills.
-        ["Kinetic Blast of Clustering|Brutality"] = (int)SupportTier.Bad,
-        ["Soulrend of Reaping|Brutality"] = (int)SupportTier.Bad,
-        ["Wither|Brutality"] = (int)SupportTier.Bad,
-        ["Void Sphere|Brutality"] = (int)SupportTier.Bad,
+        ["Kinetic Blast of Clustering|Return"] = (int)SupportTier.S,
+        ["Kinetic Blast of Clustering|Multiple Projectiles"] = (int)SupportTier.A,
+        ["Kinetic Blast of Clustering|Greater Multiple Projectiles"] = (int)SupportTier.S,
+        ["Ice Shot|Return"] = (int)SupportTier.S,
+        ["Ice Shot|Elemental Damage with Attacks"] = (int)SupportTier.A,
+        ["Vaal Ice Shot|Return"] = (int)SupportTier.S,
+        ["Vaal Ice Shot|Cooldown Recovery"] = (int)SupportTier.A,
+        ["Spectral Helix of Trarthus|Multiple Traps"] = (int)SupportTier.S,
+        ["Spectral Helix of Trarthus|Trap and Mine Damage"] = (int)SupportTier.A,
+        ["Spectral Helix of Trarthus|Slower Projectiles"] = (int)SupportTier.B,
+        ["Static Strike|Elemental Damage with Attacks"] = (int)SupportTier.A,
+        ["Static Strike|More Duration"] = (int)SupportTier.A,
+        ["Static Strike|Chain"] = (int)SupportTier.B,
+        ["Frost Blades|Return"] = (int)SupportTier.S,
+        ["Frost Blades|Elemental Damage with Attacks"] = (int)SupportTier.A,
+        ["Frost Blades|Chain"] = (int)SupportTier.B,
+        ["Frost Blades|Hypothermia"] = (int)SupportTier.A,
+        ["Frost Blades|Cold Penetration"] = (int)SupportTier.B,
+        ["Vigilant Strike|Gilded Fortification"] = (int)SupportTier.S,
+        ["Volcanic Fissure of Snaking|Gilded Additional Fissures"] = (int)SupportTier.A,
+        ["Kinetic Blast of Clustering|Brutality"] = (int)SupportTier.D,
+        ["Soulrend of Reaping|Brutality"] = (int)SupportTier.D,
+        ["Wither|Brutality"] = (int)SupportTier.D,
+        ["Void Sphere|Brutality"] = (int)SupportTier.D,
     };
 
-    // Replaces the wanted/bad skill lists, the archetype tiers, and the support
-    // ratings with the curated preset (including auto-derived "Infamous" variants).
     public void LoadAutoAssignedStrategy()
     {
         Settings.SkillFilter.Clear();
@@ -269,8 +230,7 @@ public partial class MercScanner
         Settings.BadSkillFilter.Clear();
         Settings.BadSkillFilter.AddRange(DefaultBadSkills);
 
-        foreach (var key in MercenaryStats.Keys)
-            Settings.MercenaryTiers[key] = (int)MercTier.None;
+        ResetAllTiers();
 
         foreach (var (name, tier) in DefaultArchetypeTiers)
         {
@@ -295,20 +255,23 @@ public partial class MercScanner
             $"{Settings.SupportRatings.Count} support ratings, {Settings.SupportSkillOverrides.Count} combo overrides.");
     }
 
-    // True factory reset: clears every list, drops every tier to None, and wipes
-    // the support ratings so everything falls back to Neutral grey.
     public void ZeroAllDefaults()
     {
         Settings.SkillFilter.Clear();
         Settings.BadSkillFilter.Clear();
 
-        foreach (var key in MercenaryStats.Keys)
-            Settings.MercenaryTiers[key] = (int)MercTier.None;
+        ResetAllTiers();
 
         Settings.SupportRatings.Clear();
         Settings.SupportSkillOverrides.Clear();
 
         LogMessage("Defaults restored: skill lists, archetype tiers and support ratings were zeroed.");
+    }
+
+    private void ResetAllTiers()
+    {
+        foreach (var key in MercenaryStats.Keys)
+            Settings.MercenaryTiers[key] = (int)MercTier.None;
     }
 
     private static MercTier NextBetterTier(MercTier tier) => tier switch
