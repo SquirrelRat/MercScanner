@@ -7,24 +7,28 @@ using ExileCore.PoEMemory;
 using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.PoEMemory.FilesInMemory;
 using ExileCore.Shared.Enums;
-using ExileCore.Shared.Helpers;
 using ImGuiNET;
 using SharpDX;
 
 namespace MercScanner;
 
-public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
+public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 {
-    private MercScannerSettingsDrawer _settingsDrawer;
     private Dictionary<string, StatType?> _skillAttributeMap;
     private FlameLinkController _flameLink;
-
-    internal FlameLinkController FlameLink => _flameLink;
+    private MercPanelScanner _panelScanner;
+    private int _selectedAuraIndex = -1;
+    private int _badSelectedAuraIndex = -1;
+    private string _skillFilterInput = "";
+    private string _badSkillFilterInput = "";
 
     #region Data
     internal enum StatType { Str, Dex, Int }
     internal enum MercTier { None = 0, S = 1, A = 2, B = 3, C = 4 }
     internal enum CooldownBarStyle { Inline = 0, BelowText = 1, FillBackground = 2 }
+
+    internal static readonly string[] CooldownBarStyleLabels =
+        ["Inline", "Below Text", "Fill Background"];
     internal static readonly Dictionary<string, List<StatType>> MercenaryStats = InitializeMercStats();
     internal static readonly string[] MercenaryKeysSorted = [.. MercenaryStats.Keys.OrderByDescending(k => k.Length)];
 
@@ -74,14 +78,33 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private static bool IsDisplayableSkill(ActorSkill skill) =>
         skill.Name is not null and not "" and not "Move" and not "EASMercenaryPortalOut";
 
+    private static bool IsMercenary(Entity m) =>
+        !m.IsHostile && m.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal);
+
+    private static bool IsHiredMerc(Entity m) =>
+        m.Metadata.Contains("Allied", StringComparison.Ordinal);
+
+    private static string StripMercenarySuffix(string s) =>
+        s.EndsWith("Mercenary") ? s[..^"Mercenary".Length] : s;
+
+    private bool MatchesFilter(string text) =>
+        MatchesAny(Settings.SkillFilter, text);
+
+    private bool MatchesBadFilter(string text) =>
+        MatchesAny(Settings.BadSkillFilter, text);
+
+    private static bool MatchesAny(List<string> list, string text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        list.Any(x =>
+            !string.IsNullOrWhiteSpace(x) &&
+            text.Contains(x, StringComparison.InvariantCultureIgnoreCase));
+
     private static string GetSkillDisplayName(ActorSkill skill)
     {
         var effects = skill.EffectsPerLevel;
         var displayName = effects?.SkillGemWrapper?.ActiveSkill?.DisplayName
                           ?? effects?.SkillGemWrapper?.Name;
-        return !string.IsNullOrWhiteSpace(displayName)
-            ? (displayName.EndsWith("Mercenary") ? displayName[..^"Mercenary".Length] : displayName)
-            : (skill.Name.EndsWith("Mercenary") ? skill.Name[..^"Mercenary".Length] : skill.Name);
+        return StripMercenarySuffix(string.IsNullOrWhiteSpace(displayName) ? skill.Name : displayName);
     }
 
     private static int GetStatInt(Stats stats, GameStat stat)
@@ -91,25 +114,19 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     private static List<StatType> GetMercStatTypes(Entity mon, string name)
     {
-        if (mon.TryGetComponent<Stats>(out var stats))
+        if (mon.TryGetComponent<Stats>(out var stats) && GetStatInt(stats, GameStat.Level) > 0)
         {
-            if (GetStatInt(stats, GameStat.Level) > 0)
+            var str = GetStatInt(stats, GameStat.Strength);
+            var dex = GetStatInt(stats, GameStat.Dexterity);
+            var intel = GetStatInt(stats, GameStat.Intelligence);
+            if (str + dex + intel > 0)
             {
-                var str = GetStatInt(stats, GameStat.Strength);
-                var dex = GetStatInt(stats, GameStat.Dexterity);
-                var intel = GetStatInt(stats, GameStat.Intelligence);
-                if (str + dex + intel > 0)
-                {
-                    var max = Math.Max(str, Math.Max(dex, intel));
-                    if (max <= 0) return null;
-
-                    var threshold = Math.Max(1, (int)(max * 0.72f));
-                    var list = new List<StatType>(3);
-                    if (str >= threshold) list.Add(StatType.Str);
-                    if (dex >= threshold) list.Add(StatType.Dex);
-                    if (intel >= threshold) list.Add(StatType.Int);
-                    return list;
-                }
+                var threshold = Math.Max(1, (int)(Math.Max(str, Math.Max(dex, intel)) * 0.72f));
+                var list = new List<StatType>(3);
+                if (str >= threshold) list.Add(StatType.Str);
+                if (dex >= threshold) list.Add(StatType.Dex);
+                if (intel >= threshold) list.Add(StatType.Int);
+                return list;
             }
         }
 
@@ -152,10 +169,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         var byKeyword = buffs.BuffsList.FirstOrDefault(b =>
         {
             var bn = b.DisplayName ?? b.Name;
-            return !string.IsNullOrWhiteSpace(bn) &&
-                   Settings.SkillFilter.Content.Any(x =>
-                       !string.IsNullOrWhiteSpace(x.Value) &&
-                       bn.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
+            return !string.IsNullOrWhiteSpace(bn) && MatchesFilter(bn);
         });
         return byKeyword;
     }
@@ -203,8 +217,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     #region Core Plugin Methods
     public override bool Initialise()
     {
-        _settingsDrawer = new MercScannerSettingsDrawer(this, Settings);
         _flameLink = new FlameLinkController(this);
+        _panelScanner = new MercPanelScanner(this);
 
         _skillAttributeMap = new Dictionary<string, StatType?>(StringComparer.OrdinalIgnoreCase);
         try
@@ -248,55 +262,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     private List<Entity> GetHiredMercs()
     {
-        var hired = new List<Entity>();
-        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return hired;
-
-        foreach (var mon in monsters)
-        {
-            if (mon.IsHostile) continue;
-            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
-            if (!mon.Metadata.Contains("Allied", StringComparison.Ordinal)) continue;
-            hired.Add(mon);
-        }
-
-        return hired;
-    }
-
-    public void AutoAssignTiers()
-    {
-        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return;
-
-        foreach (var mon in monsters)
-        {
-            if (mon.IsHostile) continue;
-            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
-            var name = mon.RenderName;
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            if (GetMercLevel(mon) == null) continue;
-
-            Settings.MercenaryTiers[name] = (int)ComputeSuggestedTier(mon);
-        }
-    }
-
-    private static MercTier ComputeSuggestedTier(Entity mon)
-    {
-        if (!mon.TryGetComponent<Stats>(out var stats)) return MercTier.C;
-
-        var score = GetStatInt(stats, GameStat.Level)
-            + GetStatInt(stats, GameStat.DamagePct) / 10f
-            + (GetStatInt(stats, GameStat.CastSpeedPct) + GetStatInt(stats, GameStat.AttackSpeedPct)) / 20f
-            + GetStatInt(stats, GameStat.MovementVelocityPct) / 20f
-            + (GetStatInt(stats, GameStat.BaseFireDamageResistancePct)
-               + GetStatInt(stats, GameStat.BaseColdDamageResistancePct)
-               + GetStatInt(stats, GameStat.BaseLightningDamageResistancePct)) / 30f;
-
-        return score switch
-        {
-            >= 70f => MercTier.S,
-            >= 55f => MercTier.A,
-            >= 40f => MercTier.B,
-            _ => MercTier.C
-        };
+        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return new List<Entity>();
+        return monsters.Where(IsMercenary).Where(IsHiredMerc).ToList();
     }
 
     public override void Render()
@@ -311,24 +278,58 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             return;
         }
 
+        if (encounter.IsVisible)
+        {
+            DrawEncounterPanelBorders();
+            return;
+        }
+
         DrawMercenaryOverlays();
         DrawOffScreenIndicators();
 
-        if (!encounter.IsVisible && !ally.IsVisible)
+        if (!ally.IsVisible)
         {
             DrawFrameOnMercItems();
         }
     }
     #endregion
 
-    #region Settings UI
-    public override void DrawSettings()
-    {
-        _settingsDrawer.Draw();
-    }
-    #endregion
-
     #region Drawing Logic
+    private static readonly (string Label, System.Numerics.Vector4 Color, List<StatType> Filter)[] StatGroups =
+    [
+        ("Strength",              new(0.82f, 0.12f, 0.12f, 1), [StatType.Str]),
+        ("Dexterity",             new(0.12f, 0.82f, 0.12f, 1), [StatType.Dex]),
+        ("Intelligence",          new(0.12f, 0.50f, 1.00f, 1), [StatType.Int]),
+        ("Str / Dex",             new(0.82f, 0.50f, 0.00f, 1), [StatType.Str, StatType.Dex]),
+        ("Str / Int",             new(0.82f, 0.30f, 0.60f, 1), [StatType.Str, StatType.Int]),
+        ("Dex / Int",             new(0.00f, 0.65f, 0.50f, 1), [StatType.Dex, StatType.Int]),
+        ("Str / Dex / Int",       new(0.60f, 0.30f, 0.60f, 1), [StatType.Str, StatType.Dex, StatType.Int]),
+    ];
+
+    private static readonly string[] KnownAuraDisplayNames =
+        KnownAuraEntries.Select(e => e.DisplayName).ToArray();
+
+    private void AddAuraToFilter(string displayName) =>
+        AddFilterEntry(Settings.SkillFilter, displayName);
+
+    private void AddBadAuraToFilter(string displayName) =>
+        AddFilterEntry(Settings.BadSkillFilter, displayName);
+
+    private void AddSkillFilterEntry(string text) =>
+        AddFilterEntry(Settings.SkillFilter, text);
+
+    private void AddBadSkillFilterEntry(string text) =>
+        AddFilterEntry(Settings.BadSkillFilter, text);
+
+    private static void AddFilterEntry(List<string> list, string text)
+    {
+        var entry = text.Trim();
+        if (entry.Length == 0) return;
+        if (list.Any(x =>
+                x.Equals(entry, StringComparison.InvariantCultureIgnoreCase))) return;
+        list.Add(entry);
+    }
+
     private void DrawFrameOnMercItems()
     {
         if (!Settings.HighlightMercenary.Value) return;
@@ -363,6 +364,34 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 DrawTierLabel(label.Label, matchedMercKey);
             }
         }
+    }
+
+    private void DrawEncounterPanelBorders()
+    {
+        if (!Settings.HighlightEncounterPanelBorders.Value) return;
+
+        var rows = _panelScanner.Read();
+        if (rows == null) return;
+
+        foreach (var row in rows)
+        {
+            var skillColor = BorderColorFor(row.Name);
+            if (skillColor != null)
+                Graphics.DrawFrame(row.Rect, skillColor.Value, 2);
+
+            foreach (var support in row.Supports)
+            {
+                var tier = ResolveSupportRating(row.Name, support.Name);
+                Graphics.DrawFrame(support.Rect, TierColor(tier), 2);
+            }
+        }
+    }
+
+    private Color? BorderColorFor(string name)
+    {
+        if (MatchesFilter(name)) return Settings.HighlightSkillColor.Value;
+        if (MatchesBadFilter(name)) return Settings.BadSkillColor.Value;
+        return null;
     }
 
     private void DrawTierFrame(RectangleF fillRect, RectangleF snakeRect, MercTier tierValue)
@@ -451,10 +480,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         foreach (var mon in monsters)
         {
             if (mon.DistancePlayer > Settings.MaxMercDistance.Value) continue;
-            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
-            if (mon.IsHostile) continue;
+            if (!IsMercenary(mon)) continue;
 
-            var isHired = mon.Metadata.Contains("Allied", StringComparison.Ordinal);
+            var isHired = IsHiredMerc(mon);
             var merScreenPos = GameController.IngameState.Camera.WorldToScreen(mon.PosNum);
             if (merScreenPos.Y < 0) continue;
 
@@ -479,15 +507,16 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 else if (Settings.ShowMercLevel.Value && level is { } hiredLevel)
                     DrawTextAbove(centerX, $"Lvl {hiredLevel}", Settings.DefaultSkillColor.Value, merScreenPos.Y, lineHeight);
 
-                if (life != null)
-                {
-                    var barY = merScreenPos.Y;
-                    if (Settings.ShowHiredMercHpBar.Value && life.MaxHP > 0)
-                        barY = DrawSimpleBar(centerX, barY, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
-                }
+                if (life != null && Settings.ShowHiredMercHpBar.Value && life.MaxHP > 0)
+                    DrawSimpleBar(centerX, merScreenPos.Y, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
 
-                if (actor != null && Settings.ShowHiredMercActionPanel.Value)
-                    DrawHiredMercActionPanel(actor, buffs, centerX, merScreenPos.Y + lineHeight, lineHeight);
+                if (actor != null)
+                {
+                    if (Settings.ShowHiredMercActionPanel.Value)
+                        DrawHiredMercActionPanel(actor, buffs, centerX, merScreenPos.Y + lineHeight, lineHeight);
+                    else if (Settings.ShowSkillCooldowns.Value)
+                        DrawHiredMercCooldowns(actor, centerX, merScreenPos.Y + lineHeight, lineHeight, 0);
+                }
 
                 continue;
             }
@@ -510,12 +539,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 if (Settings.ShowMercLevel.Value && level is { } mercLevel)
                     labelTop = DrawTextAbove(centerX, $"Lvl {mercLevel}", Settings.DefaultSkillColor.Value, labelTop, lineHeight);
 
-                if (life != null)
-                {
-                    var barY = merScreenPos.Y;
-                    if (Settings.ShowHpBar.Value && life.MaxHP > 0)
-                        barY = DrawSimpleBar(centerX, barY, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
-                }
+                if (life != null && Settings.ShowHpBar.Value && life.MaxHP > 0)
+                    DrawSimpleBar(centerX, merScreenPos.Y, life.CurHP, life.MaxHP, Settings.HpBarColor.Value, barHeight);
 
                 if (buffs != null)
                     DrawEntityBuffs(buffs, centerX, merScreenPos.Y + lineHeight);
@@ -542,6 +567,44 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return drawPos.Y;
     }
 
+    private void DrawCenteredText(float centerX, float y, string text, Color color, Color? background = null)
+    {
+        var textSize = ImGui.CalcTextSize(text);
+        var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, y);
+        Graphics.DrawTextWithBackground(text, drawPos, color, background ?? Settings.BackgroundColor.Value);
+    }
+
+    private void DrawSkillRow(float centerX, float y, string marker, Color markerColor, string name, Color nameColor)
+    {
+        var markerSize = ImGui.CalcTextSize(marker);
+        var nameSize = ImGui.CalcTextSize(name);
+        const float glyphGap = 2f;
+        const float padding = 2f;
+        var totalWidth = markerSize.X + glyphGap + nameSize.X;
+        var height = Math.Max(markerSize.Y, nameSize.Y);
+        var x = centerX - totalWidth / 2;
+
+        // One background behind the whole marker+name row so there is no empty
+        // strip of background between the "+"/"-" glyph and the skill name.
+        var bgRect = new RectangleF(x - padding, y - padding, totalWidth + padding * 2, height + padding * 2);
+        Graphics.DrawBox(bgRect, Settings.BackgroundColor.Value);
+
+        var transparent = new Color(0, 0, 0, 0);
+        Graphics.DrawTextWithBackground(marker, new System.Numerics.Vector2(x, y), markerColor, transparent);
+        Graphics.DrawTextWithBackground(name, new System.Numerics.Vector2(x + markerSize.X + glyphGap, y), nameColor, transparent);
+    }
+
+    private static Color Desaturate(Color c)
+    {
+        var gray = (byte)((c.R + c.G + c.B) / 3);
+        const float amount = 0.65f;
+        return new Color(
+            (byte)(c.R * (1 - amount) + gray * amount),
+            (byte)(c.G * (1 - amount) + gray * amount),
+            (byte)(c.B * (1 - amount) + gray * amount),
+            c.A);
+    }
+
     private void DrawLevelAndLinkStatus(float centerX, Entity mon, int? level, float currentTop, float lineHeight)
     {
         var linked = _flameLink != null && _flameLink.IsLinked(mon);
@@ -553,17 +616,15 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         var linkSize = ImGui.CalcTextSize(linkText);
 
         const float gap = 6f;
-        var totalWidth = levelSize.X + (levelSize.X > 0 ? gap : 0) + linkSize.X;
+        var levelGap = levelSize.X > 0 ? gap : 0f;
+        var totalWidth = levelSize.X + levelGap + linkSize.X;
         var startX = centerX - totalWidth / 2;
         var rowY = currentTop - Math.Max(levelSize.Y, linkSize.Y) - 2;
 
-        var levelPos = new System.Numerics.Vector2(startX, rowY);
-        var linkPos = new System.Numerics.Vector2(startX + levelSize.X + (levelSize.X > 0 ? gap : 0), rowY);
-
         if (levelSize.X > 0)
-            Graphics.DrawTextWithBackground(levelText, levelPos, Settings.DefaultSkillColor.Value, Settings.BackgroundColor.Value);
+            Graphics.DrawTextWithBackground(levelText, new System.Numerics.Vector2(startX, rowY), Settings.DefaultSkillColor.Value, Settings.BackgroundColor.Value);
 
-        Graphics.DrawTextWithBackground(linkText, linkPos, linkColor, Settings.BackgroundColor.Value);
+        Graphics.DrawTextWithBackground(linkText, new System.Numerics.Vector2(startX + levelSize.X + levelGap, rowY), linkColor, Settings.BackgroundColor.Value);
     }
 
     private void DrawHiredMercActionPanel(Actor actor, Buffs buffs, float centerX, float startY, float lineHeight)
@@ -575,10 +636,9 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             foreach (var skill in actor.ActorSkills)
             {
                 if (!IsDisplayableSkill(skill)) continue;
-                if (skill.IsUsing || skill.IsChanneling || skill.IsOnCooldown) continue;
 
                 var auraName = GetSkillDisplayName(skill);
-                var isAura = IsAuraFilterMatch(skill, auraName, skill.EffectsPerLevel);
+                var isAura = IsAutoDetectedAura(skill, skill.EffectsPerLevel);
 
                 if (!isAura) continue;
 
@@ -590,57 +650,13 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                     : "";
 
                 var text = isActive ? $">> {auraName}{timerText} <<" : $"- {auraName}";
-                var textSize = ImGui.CalcTextSize(text);
-                var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-
                 var color = isActive ? Settings.AuraActiveColor.Value : new Color(0.45f, 0.45f, 0.45f, 1f);
-                Graphics.DrawTextWithBackground(text, drawPos, color, Settings.BackgroundColor.Value);
+                DrawCenteredText(centerX, startY + lineHeight * line, text, color);
                 line++;
             }
 
             if (Settings.ShowSkillCooldowns.Value)
-            {
-                foreach (var skill in actor.ActorSkills)
-                {
-                    if (!IsDisplayableSkill(skill)) continue;
-                    if (skill.IsChanneling) continue;
-                    if (!skill.IsOnCooldown) continue;
-
-                    var skillName = GetSkillDisplayName(skill);
-                    var cooldownInfo = skill.CooldownInfo?.SkillCooldowns is { Count: > 0 }
-                        ? skill.CooldownInfo.SkillCooldowns[0] : null;
-
-                    var cdRemaining = Math.Max(0f, cooldownInfo?.Remaining ?? skill.Cooldown);
-                    var cdTotal = skill.Cooldown;
-                    var cdText = cooldownInfo != null
-                        ? $" [{cdRemaining:F1}s]"
-                        : skill.Cooldown > 0 ? $" [{skill.Cooldown:F1}s]" : " [cd]";
-
-                    var text = $"{skillName}{cdText}";
-                    var textSize = ImGui.CalcTextSize(text);
-                    var rowY = startY + lineHeight * line;
-
-                    var remainingFraction = cdTotal > 0
-                        ? Math.Clamp((float)cdRemaining / cdTotal, 0f, 1f)
-                        : 1f;
-
-                    switch ((CooldownBarStyle)Settings.SkillCooldownBarStyle.Value)
-                    {
-                        case CooldownBarStyle.BelowText:
-                            DrawCooldownBarBelow(centerX, rowY, text, textSize, remainingFraction);
-                            line += 2;
-                            break;
-                        case CooldownBarStyle.FillBackground:
-                            DrawCooldownBarFill(centerX, rowY, text, textSize, remainingFraction);
-                            line++;
-                            break;
-                        default:
-                            DrawCooldownBarInline(centerX, rowY, text, textSize, remainingFraction);
-                            line++;
-                            break;
-                    }
-                }
-            }
+                line = DrawHiredMercCooldowns(actor, centerX, startY, lineHeight, line);
         }
 
         var usingSkill = (actor.Action & ActionFlags.UsingAbility) != 0;
@@ -659,10 +675,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         }
         else if (isMoving)
         {
-            var text = "- Moving...";
-            var textSize = ImGui.CalcTextSize(text);
-            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-            Graphics.DrawTextWithBackground(text, drawPos, new Color(0.6f, 0.6f, 0.6f, 1f), Settings.BackgroundColor.Value);
+            DrawCenteredText(centerX, startY + lineHeight * line, "- Moving...", new Color(0.6f, 0.6f, 0.6f, 1f));
             line++;
         }
 
@@ -673,49 +686,85 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 var buffName = buff.DisplayName ?? buff.Name;
                 if (string.IsNullOrWhiteSpace(buffName)) continue;
 
-                var isHighlighted = Settings.SkillFilter.Content.Any(x =>
-                    !string.IsNullOrWhiteSpace(x.Value) &&
-                    buffName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
+                var isHighlighted = MatchesFilter(buffName);
                 if (!isHighlighted) continue;
 
                 var timerText = buff.MaxTime > 0 && buff.MaxTime < PermanentBuffTime ? $" {buff.Timer:F1}s" : "";
-                var text = $">> {buffName}{timerText} <<";
-                var textSize = ImGui.CalcTextSize(text);
-                var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-
-                Graphics.DrawTextWithBackground(text, drawPos, Settings.AuraActiveColor.Value, Settings.BackgroundColor.Value);
+                DrawCenteredText(centerX, startY + lineHeight * line, $">> {buffName}{timerText} <<", Settings.AuraActiveColor.Value);
                 line++;
             }
         }
     }
 
+    private int DrawHiredMercCooldowns(Actor actor, float centerX, float startY, float lineHeight, int line)
+    {
+        if (actor.ActorSkills == null) return line;
+
+        foreach (var skill in actor.ActorSkills)
+        {
+            if (!IsDisplayableSkill(skill)) continue;
+            if (skill.IsChanneling) continue;
+            if (!skill.IsOnCooldown) continue;
+
+            var auraName = GetSkillDisplayName(skill);
+            if (IsAutoDetectedAura(skill, skill.EffectsPerLevel)) continue;
+
+            var cooldownInfo = skill.CooldownInfo?.SkillCooldowns is { Count: > 0 }
+                ? skill.CooldownInfo.SkillCooldowns[0] : null;
+
+            var cdRemaining = Math.Max(0f, cooldownInfo?.Remaining ?? skill.Cooldown);
+            var cdTotal = skill.Cooldown;
+            var cdText = cooldownInfo != null
+                ? $" [{cdRemaining:F1}s]"
+                : skill.Cooldown > 0 ? $" [{skill.Cooldown:F1}s]" : " [cd]";
+
+            var text = $"{auraName}{cdText}";
+            var textSize = ImGui.CalcTextSize(text);
+            var rowY = startY + lineHeight * line;
+
+            var remainingFraction = cdTotal > 0
+                ? Math.Clamp((float)cdRemaining / cdTotal, 0f, 1f)
+                : 1f;
+
+            switch ((CooldownBarStyle)Settings.SkillCooldownBarStyle.Value)
+            {
+                case CooldownBarStyle.BelowText:
+                    DrawCooldownBarBelow(centerX, rowY, text, textSize, remainingFraction);
+                    line += 2;
+                    break;
+                case CooldownBarStyle.FillBackground:
+                    DrawCooldownBarFill(centerX, rowY, text, textSize, remainingFraction);
+                    line++;
+                    break;
+                default:
+                    DrawCooldownBarInline(centerX, rowY, text, textSize, remainingFraction);
+                    line++;
+                    break;
+            }
+        }
+
+        return line;
+    }
+
     private void DrawCooldownBarInline(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
     {
-        const float cdBarWidth = 64f;
-        const float cdBarHeight = 8f;
-        const float textBarGap = 6f;
-        var rowWidth = textSize.X + textBarGap + cdBarWidth;
+        const float barWidth = 64f;
+        const float barHeight = 8f;
+        const float gap = 6f;
+        var rowWidth = textSize.X + gap + barWidth;
         var rowX = centerX - rowWidth / 2;
 
-        var drawPos = new System.Numerics.Vector2(rowX, rowY);
-        Graphics.DrawTextWithBackground(text, drawPos, new Color(0.35f, 0.8f, 0.45f, 1f), Settings.BackgroundColor.Value);
-
-        var barX = rowX + textSize.X + textBarGap;
-        var barY = rowY + (textSize.Y - cdBarHeight) / 2;
-        DrawCdBar(new RectangleF(barX, barY, cdBarWidth, cdBarHeight), remainingFraction);
+        DrawCooldownBarText(text, new System.Numerics.Vector2(rowX, rowY), false);
+        DrawCdBar(new RectangleF(rowX + textSize.X + gap, rowY + (textSize.Y - barHeight) / 2, barWidth, barHeight), remainingFraction);
     }
 
     private void DrawCooldownBarBelow(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
     {
-        const float cdBarWidth = 120f;
-        const float cdBarHeight = 8f;
+        const float barWidth = 120f;
+        const float barHeight = 8f;
 
-        var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, rowY);
-        Graphics.DrawTextWithBackground(text, drawPos, new Color(0.35f, 0.8f, 0.45f, 1f), Settings.BackgroundColor.Value);
-
-        var barX = centerX - cdBarWidth / 2;
-        var barY = rowY + textSize.Y + 3;
-        DrawCdBar(new RectangleF(barX, barY, cdBarWidth, cdBarHeight), remainingFraction);
+        DrawCooldownBarText(text, new System.Numerics.Vector2(centerX - textSize.X / 2, rowY), false);
+        DrawCdBar(new RectangleF(centerX - barWidth / 2, rowY + textSize.Y + 3, barWidth, barHeight), remainingFraction);
     }
 
     private void DrawCooldownBarFill(float centerX, float rowY, string text, System.Numerics.Vector2 textSize, float remainingFraction)
@@ -725,15 +774,18 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         Graphics.DrawBox(bgRect, new Color(0, 0, 0, 200));
 
         if (remainingFraction > 0f)
-        {
-            var fillRect = new RectangleF(bgRect.X, bgRect.Y, bgRect.Width * remainingFraction, bgRect.Height);
-            Graphics.DrawBox(fillRect, new Color(0.25f, 0.55f, 0.85f, 0.5f));
-        }
+            Graphics.DrawBox(FractionRect(bgRect, remainingFraction), new Color(0.25f, 0.55f, 0.85f, 0.5f));
 
         Graphics.DrawFrame(bgRect, new Color(0.35f, 0.55f, 0.75f, 0.9f), 1);
 
-        var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, rowY);
-        Graphics.DrawTextWithBackground(text, drawPos, new Color(1f, 1f, 1f, 1f), new Color(0, 0, 0, 0));
+        DrawCooldownBarText(text, new System.Numerics.Vector2(centerX - textSize.X / 2, rowY), true);
+    }
+
+    private void DrawCooldownBarText(string text, System.Numerics.Vector2 drawPos, bool onFill)
+    {
+        var color = onFill ? new Color(1f, 1f, 1f, 1f) : new Color(0.35f, 0.8f, 0.45f, 1f);
+        var background = onFill ? new Color(0, 0, 0, 0) : Settings.BackgroundColor.Value;
+        Graphics.DrawTextWithBackground(text, drawPos, color, background);
     }
 
     private void DrawCdBar(RectangleF barRect, float remainingFraction)
@@ -743,27 +795,25 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
         if (remainingFraction > 0f)
         {
-            var fillRect = new RectangleF(barRect.X, barRect.Y, barRect.Width * remainingFraction, barRect.Height);
-            Graphics.DrawBox(fillRect, new Color(0.3f, 0.7f, 1f, 0.9f));
+            Graphics.DrawBox(FractionRect(barRect, remainingFraction), new Color(0.3f, 0.7f, 1f, 0.9f));
         }
     }
 
-    private float DrawSimpleBar(float centerX, float startY, int cur, int max, Color fillColor, float barHeight)
+    private static RectangleF FractionRect(RectangleF rect, float fraction) =>
+        new(rect.X, rect.Y, rect.Width * fraction, rect.Height);
+
+    private void DrawSimpleBar(float centerX, float startY, int cur, int max, Color fillColor, float barHeight)
     {
-        if (max <= 0) return startY;
+        if (max <= 0) return;
 
         const float barWidth = 120f;
         var barX = centerX - barWidth / 2;
         var bgRect = new RectangleF(barX, startY, barWidth, barHeight);
-        var bgColor = new Color(0, 0, 0, 180);
 
-        Graphics.DrawBox(bgRect, bgColor);
+        Graphics.DrawBox(bgRect, new Color(0, 0, 0, 180));
 
         var fillWidth = barWidth * Math.Min(1f, (float)cur / max);
-        var fillRect = new RectangleF(barX, startY, fillWidth, barHeight);
-        Graphics.DrawBox(fillRect, fillColor);
-
-        return startY + barHeight + 1;
+        Graphics.DrawBox(new RectangleF(barX, startY, fillWidth, barHeight), fillColor);
     }
 
     private void DrawEntityFrames(float centerX, float centerY, List<StatType> stats)
@@ -783,9 +833,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             var buffName = buff.DisplayName ?? buff.Name;
             if (string.IsNullOrWhiteSpace(buffName)) continue;
 
-            var isHighlighted = Settings.SkillFilter.Content.Any(x =>
-                !string.IsNullOrWhiteSpace(x.Value) &&
-                (buffName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase)));
+            var isHighlighted = MatchesFilter(buffName);
 
             if (!isHighlighted) continue;
 
@@ -811,29 +859,40 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         {
             var skillName = GetSkillDisplayName(skill);
 
-            var isSkillHighlighted = !string.IsNullOrWhiteSpace(skillName) &&
-                Settings.SkillFilter.Content.Any(x =>
-                    !string.IsNullOrWhiteSpace(x.Value) &&
-                    skillName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
+            var isWanted = MatchesFilter(skillName);
+            var isBad = MatchesBadFilter(skillName);
 
-            var isAura = IsAuraFilterMatch(skill, skillName, skill.EffectsPerLevel);
+            var isAura = IsAutoDetectedAura(skill, skill.EffectsPerLevel);
 
-            if (!isSkillHighlighted && !isAura && !Settings.ShowAllSkills.Value) continue;
+            if (!isWanted && !isBad && !isAura && !Settings.ShowAllSkills.Value) continue;
 
             if (isAura && Settings.SeparateAuraDisplay.Value) continue;
 
+            var attrColor = GetSkillColorForSkill(skill, skillName);
+            var rowY = startY + lineHeight * line;
+
+            if (isBad)
+            {
+                DrawSkillRow(centerX, rowY, "-", Settings.BadSkillColor.Value, skillName, Desaturate(attrColor));
+                line++;
+                continue;
+            }
+
+            if (isWanted)
+            {
+                DrawSkillRow(centerX, rowY, "+", Settings.HighlightSkillColor.Value, skillName, Settings.HighlightSkillColor.Value);
+                line++;
+                continue;
+            }
+
+            // Neutral skill (or an inline aura when the aura display is not separated).
             var labeledName = skillName;
-            var showHighlight = isSkillHighlighted || (isAura && !Settings.SeparateAuraDisplay.Value);
+            var showHighlight = isAura && !Settings.SeparateAuraDisplay.Value;
             if (showHighlight) labeledName = $">> {skillName} <<";
 
-            var attrColor = GetSkillColorForSkill(skill, skillName);
             var skillColor = showHighlight ? Settings.HighlightSkillColor.Value : attrColor;
-
-            var textSize = ImGui.CalcTextSize(labeledName);
-            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-
-            Graphics.DrawTextWithBackground(labeledName, drawPos,
-                skillColor, showHighlight ? new Color(attrColor.R, attrColor.G, attrColor.B, (byte)155) : Settings.BackgroundColor.Value);
+            Color? background = showHighlight ? new Color(attrColor.R, attrColor.G, attrColor.B, (byte)155) : null;
+            DrawCenteredText(centerX, rowY, labeledName, skillColor, background);
             line++;
         }
 
@@ -849,7 +908,7 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         {
             var auraName = GetSkillDisplayName(skill);
 
-            if (!IsAuraFilterMatch(skill, auraName, skill.EffectsPerLevel)) continue;
+            if (!IsAutoDetectedAura(skill, skill.EffectsPerLevel)) continue;
 
             var activeBuff = FindActiveAuraBuff(buffs, skill, auraName);
 
@@ -858,35 +917,33 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 ? $" {activeBuff.Timer:F1}s"
                 : "";
 
-            var isSkillHighlighted = !string.IsNullOrWhiteSpace(auraName) &&
-                Settings.SkillFilter.Content.Any(x =>
-                    !string.IsNullOrWhiteSpace(x.Value) &&
-                    auraName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
+            var isWanted = MatchesFilter(auraName);
+            var isBad = MatchesBadFilter(auraName);
+            var rowY = startY + lineHeight * line;
 
-            var displayText = isActive || isSkillHighlighted
-                ? $">> {auraName}{timerText} <<"
-                : $"- {auraName}";
+            if (isBad)
+            {
+                DrawSkillRow(centerX, rowY, "-", Settings.BadSkillColor.Value, $"{auraName}{timerText}", Desaturate(Settings.AuraActiveColor.Value));
+                line++;
+                continue;
+            }
 
-            var textColor = isActive
-                ? Settings.AuraActiveColor.Value
-                : isSkillHighlighted ? Settings.HighlightSkillColor.Value : Settings.AuraInactiveColor.Value;
+            if (isWanted)
+            {
+                DrawSkillRow(centerX, rowY, "+", Settings.HighlightSkillColor.Value, $"{auraName}{timerText}", Settings.HighlightSkillColor.Value);
+                line++;
+                continue;
+            }
 
-            var textSize = ImGui.CalcTextSize(displayText);
-            var drawPos = new System.Numerics.Vector2(centerX - textSize.X / 2, startY + lineHeight * line);
-            Graphics.DrawTextWithBackground(displayText, drawPos, textColor, Settings.BackgroundColor.Value);
-
+            var displayText = isActive ? $">> {auraName}{timerText} <<" : $"- {auraName}";
+            var textColor = isActive ? Settings.AuraActiveColor.Value : Settings.AuraInactiveColor.Value;
+            DrawCenteredText(centerX, rowY, displayText, textColor);
             line++;
         }
     }
 
-    private bool IsAuraFilterMatch(ActorSkill skill, string displayName, GrantedEffectsPerLevel effects)
+    private bool IsAutoDetectedAura(ActorSkill skill, GrantedEffectsPerLevel effects)
     {
-        var auraFilter = Settings.SkillFilter.Content.Any(x =>
-            !string.IsNullOrWhiteSpace(x.Value) &&
-            displayName.Contains(x.Value, StringComparison.InvariantCultureIgnoreCase));
-
-        if (auraFilter) return true;
-
         if (!Settings.AutoDetectAuras.Value) return false;
 
         if (effects?.SkillGemWrapper?.ActiveSkill?.InternalName is { } internalName)
@@ -984,9 +1041,8 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
         foreach (var mon in monsters)
         {
-            if (mon.IsHostile) continue;
             if (mon.DistancePlayer > Settings.MaxIndicatorDistance.Value) continue;
-            if (!mon.Metadata.StartsWith("Metadata/Monsters/Mercenaries/", StringComparison.Ordinal)) continue;
+            if (!IsMercenary(mon)) continue;
 
             var screenPos = GameController.IngameState.Camera.WorldToScreen(mon.PosNum);
             if (screenPos.X >= windowRect.X && screenPos.X <= windowRect.Right &&
@@ -1132,26 +1188,49 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return null;
     }
 
-    private static string FindOfferArchetype(Element window, string expectedName)
+    private static List<StatType> ParseStatTokens(string t)
+    {
+        var tokens = t.Split(new[] { ' ', '/', '+', '&' }, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) return null;
+
+        var stats = new List<StatType>(tokens.Length);
+        foreach (var token in tokens)
+        {
+            switch (token)
+            {
+                case "Str": stats.Add(StatType.Str); break;
+                case "Dex": stats.Add(StatType.Dex); break;
+                case "Int": stats.Add(StatType.Int); break;
+                default: return null;
+            }
+        }
+        return stats;
+    }
+
+    private static IEnumerable<string> CollectTexts(Element root, int maxDepth, int maxLength)
     {
         var texts = new List<string>();
         void Walk(Element e, int depth)
         {
-            if (e == null || depth > 6) return;
+            if (e == null || depth > maxDepth) return;
             var t = e.Text?.Trim();
-            if (!string.IsNullOrEmpty(t) && t.Length < 60) texts.Add(t);
+            if (!string.IsNullOrEmpty(t) && t.Length < maxLength) texts.Add(t);
             foreach (var c in e.Children) Walk(c, depth + 1);
         }
-        foreach (var c in window.Children) Walk(c, 0);
+        foreach (var c in root.Children) Walk(c, 0);
+        return texts;
+    }
 
+    private static string FindOfferArchetype(Element window, string expectedName)
+    {
+        var texts = CollectTexts(window, 6, 60).ToList();
         var idx = texts.FindIndex(t => string.Equals(t, expectedName, StringComparison.OrdinalIgnoreCase));
         if (idx < 0) return null;
 
         for (var i = idx + 1; i < texts.Count; i++)
         {
             var t = texts[i];
-            var tokens = t.Split(new[] { ' ', '/', '+', '&' }, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length > 0 && tokens.All(x => x is "Str" or "Dex" or "Int")) continue;
+            if (ParseStatTokens(t) is { Count: > 0 }) continue;
             if (t.StartsWith("Lvl ", StringComparison.Ordinal) || t.StartsWith("Wager", StringComparison.Ordinal)) continue;
             if (t.Length <= 24) return t;
         }
@@ -1168,33 +1247,12 @@ public class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     private static List<StatType> FindWindowAttribute(Element window)
     {
-        var found = new List<StatType>(3);
-
-        void Scan(Element e, int depth)
+        foreach (var t in CollectTexts(window, 6, 30))
         {
-            if (e == null || depth > 6 || found.Count > 0) return;
-            var t = e.Text?.Trim();
-            if (!string.IsNullOrEmpty(t) && t.Length < 30)
-            {
-                var tokens = t.Split(new[] { ' ', '/', '+', '&' }, StringSplitOptions.RemoveEmptyEntries);
-                if (tokens.Length > 0 && tokens.All(x => x is "Str" or "Dex" or "Int"))
-                {
-                    foreach (var token in tokens)
-                    {
-                        found.Add(token switch
-                        {
-                            "Str" => StatType.Str,
-                            "Dex" => StatType.Dex,
-                            _ => StatType.Int
-                        });
-                    }
-                }
-            }
-            foreach (var c in e.Children) Scan(c, depth + 1);
+            var stats = ParseStatTokens(t);
+            if (stats is { Count: > 0 }) return stats;
         }
-
-        foreach (var c in window.Children) Scan(c, 0);
-        return found;
+        return new List<StatType>();
     }
 
     #endregion
