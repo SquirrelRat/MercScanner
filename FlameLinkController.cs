@@ -92,6 +92,8 @@ public class FlameLinkController
     {
         if (merc is not { IsValid: true }) return false;
 
+        // Missing buff data is treated as linked to avoid recasting while the
+        // client has not populated the mercenary's component yet.
         if (!merc.TryGetComponent<Buffs>(out var buffs) || buffs?.BuffsList == null) return true;
 
         if (RecentlyCast(merc.Id)) return true;

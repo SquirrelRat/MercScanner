@@ -13,6 +13,8 @@ public sealed class MercPanelScanner
 {
     private const float RowWidth = 539f;
     private const float RowHeight = 44f;
+    private const float RowWidthTolerance = 0.15f;
+    private const float RowHeightTolerance = 0.2f;
 
     private const int RefreshMs = 250;
 
@@ -77,7 +79,10 @@ public sealed class MercPanelScanner
         try
         {
             var rect = e.GetClientRect();
-            return Math.Abs(rect.Width - RowWidth) < 8f && Math.Abs(rect.Height - RowHeight) < 4f;
+            // The encounter UI scales with the client's UI scale. Use a wider
+            // proportional tolerance rather than rejecting valid scaled rows.
+            return Math.Abs(rect.Width - RowWidth) <= RowWidth * RowWidthTolerance &&
+                   Math.Abs(rect.Height - RowHeight) <= RowHeight * RowHeightTolerance;
         }
         catch
         {

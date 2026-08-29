@@ -255,7 +255,7 @@ public partial class MercScanner
             $"{Settings.SupportRatings.Count} support ratings, {Settings.SupportSkillOverrides.Count} combo overrides.");
     }
 
-    public void ZeroAllDefaults()
+    public void ClearAllStrategyData()
     {
         Settings.SkillFilter.Clear();
         Settings.BadSkillFilter.Clear();

@@ -21,6 +21,8 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private int _badSelectedAuraIndex = -1;
     private string _skillFilterInput = "";
     private string _badSkillFilterInput = "";
+    private readonly List<Entity> _hiredMercScratch = new();
+    private readonly Dictionary<string, string> _classByMetadata = new(StringComparer.Ordinal);
 
     #region Data
     internal enum StatType { Str, Dex, Int }
@@ -294,18 +296,25 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
     public override Job Tick()
     {
-        _flameLink?.Update(GetHiredMercs());
-        return null;
-    }
+        _hiredMercScratch.Clear();
+        if (Settings.Enable.Value &&
+            GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters))
+        {
+            foreach (var monster in monsters)
+            {
+                if (IsMercenary(monster) && IsHiredMerc(monster))
+                    _hiredMercScratch.Add(monster);
+            }
+        }
 
-    private List<Entity> GetHiredMercs()
-    {
-        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return new List<Entity>();
-        return monsters.Where(IsMercenary).Where(IsHiredMerc).ToList();
+        _flameLink?.Update(_hiredMercScratch);
+        return null;
     }
 
     public override void Render()
     {
+        if (!Settings.Enable.Value) return;
+
         var panels = GameController.IngameState.IngameUi;
         var encounter = panels.MercenaryEncounterWindow;
         var ally = panels.AllyEquipmentWindow;
@@ -319,6 +328,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         if (encounter.IsVisible)
         {
             DrawEncounterPanelBorders();
+            CacheIndicatorClasses(encounter);
             return;
         }
 
@@ -399,7 +409,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
 
                 DrawNestedFrames(iconRect, stats);
 
-                DrawTierLabel(label.Label, matchedMercKey);
+                DrawTierLabel(label.Label, tierValue);
             }
         }
     }
@@ -471,11 +481,18 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         }
     }
 
-    private void DrawTierLabel(Element label, string mercName)
+    private float DrawTierText(float centerX, float currentTop, MercTier tier, float lineHeight)
+    {
+        if (!Settings.ShowTierText.Value || tier == MercTier.None) return currentTop;
+
+        var (tierText, tierColor) = GetTierInfo(tier);
+        return DrawTextAbove(centerX, tierText, tierColor, currentTop, lineHeight);
+    }
+
+    private void DrawTierLabel(Element label, MercTier tierValue)
     {
         if (!Settings.ShowTierText.Value) return;
 
-        var tierValue = (MercTier)Settings.MercenaryTiers.GetValueOrDefault(mercName, 0);
         if (tierValue == MercTier.None) return;
 
         (string tierText, Color tierColor) = GetTierInfo(tierValue);
@@ -517,7 +534,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         }
     }
 
-    private Color GetColorForStat(StatType stat) => stat switch
+    private Color GetColorForStat(StatType? stat) => stat switch
     {
         StatType.Str => Settings.StrColor.Value,
         StatType.Dex => Settings.DexColor.Value,
@@ -586,8 +603,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                     var tierValue = (MercTier)Settings.MercenaryTiers.GetValueOrDefault(name, 0);
                     if (tierValue != MercTier.None)
                     {
-                        var (tierText, tierColor) = GetTierInfo(tierValue);
-                        labelTop = DrawTextAbove(centerX, tierText, tierColor, labelTop, lineHeight);
+                        labelTop = DrawTierText(centerX, labelTop, tierValue, lineHeight);
                     }
                 }
                 if (Settings.ShowMercLevel.Value && level is { } mercLevel)
@@ -765,7 +781,9 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 ? skill.CooldownInfo.SkillCooldowns[0] : null;
 
             var cdRemaining = Math.Max(0f, cooldownInfo?.Remaining ?? skill.Cooldown);
-            var cdTotal = skill.Cooldown;
+            var cdTotal = cooldownInfo?.TotalCooldown > 0
+                ? cooldownInfo.TotalCooldown
+                : skill.Cooldown;
             var cdText = cooldownInfo != null
                 ? $" [{cdRemaining:F1}s]"
                 : skill.Cooldown > 0 ? $" [{skill.Cooldown:F1}s]" : " [cd]";
@@ -1008,15 +1026,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private Color GetSkillColorForSkill(ActorSkill skill, string skillName)
     {
         if (_skillAttributeMap.TryGetValue(skillName, out var attr))
-        {
-            return attr switch
-            {
-                StatType.Str => Settings.StrColor.Value,
-                StatType.Dex => Settings.DexColor.Value,
-                StatType.Int => Settings.IntColor.Value,
-                _ => Settings.DefaultSkillColor.Value
-            };
-        }
+            return GetColorForStat(attr);
 
         if (skill.IsCry) return Settings.StrColor.Value;
         if (skill.IsMine || skill.IsTrap) return Settings.DexColor.Value;
@@ -1088,7 +1098,8 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return;
 
         var windowRect = GameController.Window.GetWindowRectangleTimeCache;
-        var center = new System.Numerics.Vector2(windowRect.X + windowRect.Width / 2f, windowRect.Y + windowRect.Height / 2f);
+        var clientRect = new RectangleF(0, 0, windowRect.Width, windowRect.Height);
+        var center = new System.Numerics.Vector2(clientRect.Width / 2f, clientRect.Height / 2f);
 
         foreach (var mon in monsters)
         {
@@ -1096,19 +1107,18 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
             if (!IsMercenary(mon)) continue;
 
             var screenPos = GameController.IngameState.Camera.WorldToScreen(mon.PosNum);
-            if (screenPos.X >= windowRect.X && screenPos.X <= windowRect.Right &&
-                screenPos.Y >= windowRect.Y && screenPos.Y <= windowRect.Bottom) continue;
+            if (screenPos.X >= clientRect.X && screenPos.X <= clientRect.Right &&
+                screenPos.Y >= clientRect.Y && screenPos.Y <= clientRect.Bottom) continue;
 
             var dir = screenPos - center;
             if (dir.LengthSquared() < 1f) continue;
             dir = System.Numerics.Vector2.Normalize(dir);
 
-            var target = ClipRayToRect(center, dir, windowRect, 42f);
+            var target = ClipRayToRect(center, dir, clientRect, 42f);
             if (target == null) continue;
 
             var name = mon.RenderName;
-            var window = GameController.IngameState.IngameUi.MercenaryEncounterWindow;
-            var stats = GetIndicatorStats(mon, name, window);
+            var stats = GetIndicatorStats(mon, name);
             var color = stats is { Count: > 0 }
                 ? GetColorForStat(stats[0])
                 : mon.Metadata.Contains("Allied", StringComparison.Ordinal)
@@ -1122,7 +1132,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
                 color);
 
             var label = string.IsNullOrWhiteSpace(name) ? "Mercenary" : name;
-            var cls = GetIndicatorClass(mon, name, window);
+            var cls = GetIndicatorClass(mon, name);
             var lineHeight = ImGui.GetTextLineHeight();
 
             var arrowBase = target.Value - dir * 12f;
@@ -1173,7 +1183,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return origin + dir * (tMin > 0 ? tMin : tMax);
     }
 
-    private List<StatType> GetIndicatorStats(Entity mon, string name, Element window)
+    private List<StatType> GetIndicatorStats(Entity mon, string name)
     {
         if (name != null)
         {
@@ -1185,12 +1195,6 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         {
             var live = GetMercStatTypes(mon, name);
             if (live is { Count: > 0 }) return live;
-        }
-
-        if (window != null && window.IsVisible)
-        {
-            var fromWindow = FindWindowAttribute(window);
-            if (fromWindow is { Count: > 0 }) return fromWindow;
         }
 
         if (mon.TryGetComponent<Actor>(out var actor) && actor.ActorSkills != null)
@@ -1210,8 +1214,6 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return null;
     }
 
-    private static readonly Dictionary<string, string> ClassByMetadata = new Dictionary<string, string>();
-
     private static string GetMetadataClass(Entity mon)
     {
         var meta = mon.Metadata;
@@ -1219,24 +1221,28 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         return slash >= 0 ? meta.Substring(slash + 1) : meta;
     }
 
-    private string GetIndicatorClass(Entity mon, string name, Element window)
+    private string GetIndicatorClass(Entity mon, string name)
     {
         if (!string.IsNullOrWhiteSpace(name) && MercenaryStats.ContainsKey(name)) return name;
 
         var metaClass = GetMetadataClass(mon);
-        if (ClassByMetadata.TryGetValue(metaClass, out var cached)) return cached;
+        return _classByMetadata.GetValueOrDefault(metaClass);
+    }
 
-        if (window != null && window.IsVisible && !string.IsNullOrWhiteSpace(name))
+    private void CacheIndicatorClasses(Element window)
+    {
+        if (!GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters)) return;
+
+        foreach (var mon in monsters)
         {
-            var cls = FindOfferArchetype(window, name);
-            if (cls != null)
-            {
-                ClassByMetadata[metaClass] = cls;
-                return cls;
-            }
-        }
+            if (!IsMercenary(mon)) continue;
 
-        return null;
+            var name = mon.RenderName;
+            var metaClass = GetMetadataClass(mon);
+            if (_classByMetadata.ContainsKey(metaClass) || string.IsNullOrWhiteSpace(name)) continue;
+
+            _classByMetadata[metaClass] = FindOfferArchetype(window, name) ?? string.Empty;
+        }
     }
 
     private static List<StatType> ParseStatTokens(string t)
@@ -1294,16 +1300,6 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
         if (skill.IsCry) return StatType.Str;
         if (skill.IsMine || skill.IsTrap) return StatType.Dex;
         return null;
-    }
-
-    private static List<StatType> FindWindowAttribute(Element window)
-    {
-        foreach (var t in CollectTexts(window, 6, 30))
-        {
-            var stats = ParseStatTokens(t);
-            if (stats is { Count: > 0 }) return stats;
-        }
-        return new List<StatType>();
     }
 
     #endregion
