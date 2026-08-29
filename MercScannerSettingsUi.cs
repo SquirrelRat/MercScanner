@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using ExileCore.Shared.Enums;
 using ExileCore.Shared.Nodes;
 using ImGuiNET;
 
@@ -10,13 +11,17 @@ namespace MercScanner;
 public partial class MercScanner
 {
     private bool _clearStrategyOpen;
+    private bool _loadStrategyOpen;
+    private bool _showAdvancedSettings;
 
     public override void DrawSettings()
     {
+        DrawSettingsHeader();
         if (!ImGui.BeginTabBar("##mercTabs")) return;
 
         (string, Action)[] tabs =
         {
+            ("Dashboard", DrawDashboardTab),
             ("General", DrawGeneralTab),
             ("Tiers", DrawTiersTab),
             ("Unhired Mercs", DrawUnhiredTab),
@@ -30,6 +35,65 @@ public partial class MercScanner
             if (ImGui.BeginTabItem(label)) { draw(); ImGui.EndTabItem(); }
 
         ImGui.EndTabBar();
+    }
+
+    private void DrawSettingsHeader()
+    {
+        ImGui.TextColored(Settings.Enable.Value ? new Vector4(0.49f, 1f, 0.25f, 1f) : new Vector4(0.65f, 0.65f, 0.7f, 1f),
+            Settings.Enable.Value ? "MERC SCANNER  /  ACTIVE" : "MERC SCANNER  /  PAUSED");
+        ImGui.SameLine(ImGui.GetWindowWidth() - 145f);
+        if (ImGui.Button(_showAdvancedSettings ? "Simple Mode" : "Advanced Mode"))
+            _showAdvancedSettings = !_showAdvancedSettings;
+        HelpMarker("Simple Mode shows the controls most users need. Advanced Mode reveals colors, timing, tier matrices, support ratings, and rendering details.");
+        ImGui.Separator();
+    }
+
+    private void DrawDashboardTab()
+    {
+        ImGui.TextWrapped("A quick view of what MercScanner is doing. Start with the recommended strategy, then tune individual sections only if needed.");
+        ImGui.Spacing();
+
+        var cardWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X * 2f) / 3f;
+        DrawStatusCard("Scanner", Settings.Enable.Value ? "Enabled" : "Disabled",
+            Settings.Enable.Value ? new SharpDX.Color(124, 252, 0, 255) : new SharpDX.Color(150, 150, 160, 255), cardWidth);
+        ImGui.SameLine();
+        DrawStatusCard("World Overlay", Settings.ShowEntityOverlays.Value ? $"Up to {Settings.MaxMercDistance.Value}m" : "Hidden",
+            Settings.ShowEntityOverlays.Value ? Settings.StrColor.Value : new SharpDX.Color(150, 150, 160, 255), cardWidth);
+        ImGui.SameLine();
+        DrawStatusCard("Offer Strategy", $"{Settings.SkillFilter.Count} wanted  /  {Settings.BadSkillFilter.Count} bad",
+            Settings.SkillFilter.Count > 0 ? Settings.HighlightSkillColor.Value : new SharpDX.Color(255, 190, 70, 255), cardWidth);
+
+        ImGui.Spacing();
+        Section("Quick Setup");
+        if (ImGui.Button("Load Recommended Strategy", new Vector2(220f, 0)))
+            _loadStrategyOpen = true;
+        HelpMarker("Loads the curated skill filters, mercenary tiers, and support ratings. It replaces your current strategy data.");
+        ImGui.SameLine();
+        if (ImGui.Button("Enable Advanced Mode", new Vector2(160f, 0)))
+            _showAdvancedSettings = true;
+        ImGui.TextDisabled("Tip: use Advanced Mode when you want to change colors or individual tier/support ratings.");
+
+        DrawLoadStrategyPopup();
+
+        Section("At A Glance");
+        var mercCount = 0;
+        if (GameController.EntityListWrapper.ValidEntitiesByType.TryGetValue(EntityType.Monster, out var monsters))
+            foreach (var monster in monsters)
+                if (IsMercenary(monster)) mercCount++;
+        ImGui.BulletText($"Mercenaries in memory: {mercCount}");
+        ImGui.BulletText($"Configured tiers: {Settings.MercenaryTiers.Count(x => x.Value > 0)} / {Settings.MercenaryTiers.Count}");
+        ImGui.BulletText($"Support ratings: {Settings.SupportRatings.Count} global, {Settings.SupportSkillOverrides.Count} combo-specific");
+        ImGui.BulletText(Settings.AutoCastFlameLink.Value ? "Flame Link auto-cast is enabled" : "Flame Link auto-cast is off");
+    }
+
+    private static void DrawStatusCard(string title, string value, SharpDX.Color color, float width)
+    {
+        ImGui.BeginChild($"##card_{title}", new Vector2(width, 58f), ImGuiChildFlags.Border, ImGuiWindowFlags.NoScrollbar);
+        ImGui.PushStyleColor(ImGuiCol.Text, ToImGuiColor(color));
+        ImGui.Text(title);
+        ImGui.PopStyleColor();
+        ImGui.TextDisabled(value);
+        ImGui.EndChild();
     }
 
     private static void HelpMarker(string text)
@@ -82,6 +146,11 @@ public partial class MercScanner
     private void DrawTiersTab()
     {
         DrawToggle("Show Tier Label", Settings.ShowTierText);
+        if (!_showAdvancedSettings)
+        {
+            ImGui.TextDisabled("Tier colors, individual mercenary ranks, and frame effects are available in Advanced Mode.");
+            return;
+        }
         DrawColor("S Tier", Settings.STierColor);
         DrawColor("A Tier", Settings.ATierColor);
         DrawColor("B Tier", Settings.BTierColor);
@@ -89,7 +158,7 @@ public partial class MercScanner
 
         Section("Auto-Assigned Strategy");
         if (ImGui.Button("Load Auto-Assigned Strategy"))
-            LoadAutoAssignedStrategy();
+            _loadStrategyOpen = true;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Populate the wanted/bad skill lists, archetype tiers and support ratings from the curated 3.29 meta preset. Replaces current lists.");
         ImGui.SameLine();
@@ -117,6 +186,7 @@ public partial class MercScanner
             }
             ImGui.EndPopup();
         }
+        DrawLoadStrategyPopup();
 
         Section("Mercenary Tiers");
         DrawTierDropdowns();
@@ -130,6 +200,28 @@ public partial class MercScanner
     }
 
     private static readonly string[] TierLabels = ["None", "S", "A", "B", "C"];
+
+    private void DrawLoadStrategyPopup()
+    {
+        if (_loadStrategyOpen)
+            ImGui.OpenPopup("Load recommended strategy?");
+        if (!ImGui.BeginPopupModal("Load recommended strategy?", ref _loadStrategyOpen, ImGuiWindowFlags.AlwaysAutoResize)) return;
+
+        ImGui.TextWrapped("This replaces your wanted/bad skill lists, mercenary tiers, support ratings, and combo overrides.");
+        if (ImGui.Button("Apply Strategy"))
+        {
+            LoadAutoAssignedStrategy();
+            _loadStrategyOpen = false;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+        {
+            _loadStrategyOpen = false;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
+    }
 
     private void DrawTierDropdowns()
     {
@@ -172,10 +264,12 @@ public partial class MercScanner
     {
         DrawToggle("Enable Entity Overlays", Settings.ShowEntityOverlays);
         DrawToggle("Show HP Bar", Settings.ShowHpBar);
-        DrawColor("HP Bar Color", Settings.HpBarColor);
+        if (_showAdvancedSettings)
+            DrawColor("HP Bar Color", Settings.HpBarColor);
         DrawToggle("Show Stat Rings", Settings.ShowEntityFrames);
         DrawToggle("Show Tier Label", Settings.ShowEntityTier);
-        DrawToggle("Infer Stats From Live Data", Settings.UseLiveStatInference);
+        if (_showAdvancedSettings)
+            DrawToggle("Infer Stats From Live Data", Settings.UseLiveStatInference);
         DrawToggle("Show Level", Settings.ShowMercLevel);
         DrawSlider("Max Distance (m)", Settings.MaxMercDistance, "Distance from the player at which world overlays are drawn.");
         DrawToggle("Off-Screen Indicators", Settings.ShowOffScreenIndicators);
@@ -187,9 +281,14 @@ public partial class MercScanner
     private void DrawLabelsTab()
     {
         DrawToggle("Highlight Mercenary Name Labels", Settings.HighlightMercenary);
-        DrawColor("Strength Label Color", Settings.StrColor);
-        DrawColor("Dexterity Label Color", Settings.DexColor);
-        DrawColor("Intelligence Label Color", Settings.IntColor);
+        if (_showAdvancedSettings)
+        {
+            DrawColor("Strength Label Color", Settings.StrColor);
+            DrawColor("Dexterity Label Color", Settings.DexColor);
+            DrawColor("Intelligence Label Color", Settings.IntColor);
+        }
+        else
+            ImGui.TextDisabled("Attribute colors are available in Advanced Mode.");
     }
 
     private void DrawSkillsTab()
@@ -201,6 +300,13 @@ public partial class MercScanner
         DrawToggle("Auto-Detect Known Auras", Settings.AutoDetectAuras);
         DrawToggle("Show Aura Timers", Settings.ShowAuraTimers);
         DrawToggle("Highlight Encounter Panel Skills & Supports", Settings.HighlightEncounterPanelBorders);
+
+        if (!_showAdvancedSettings)
+        {
+            DrawSkillFilters();
+            ImGui.TextDisabled("Skill colors, aura colors, and support ratings are available in Advanced Mode.");
+            return;
+        }
 
         Section("Color Legend");
         DrawSkillColorPreview("+ Wanted Skill", Settings.HighlightSkillColor.Value);
@@ -220,15 +326,7 @@ public partial class MercScanner
         DrawColor("Inactive Aura Color", Settings.AuraInactiveColor);
         DrawColor("Overlay Background Color", Settings.BackgroundColor, "Background behind overlay text. Alpha is supported.");
 
-        Section("Wanted Skills (green +)");
-        DrawQuickAdd(ref _selectedAuraIndex, Settings.SkillFilter, AddAuraToFilter, "##wantedAura");
-        DrawFilterListEditor("##wantedInput", Settings.SkillFilter, ref _skillFilterInput, AddSkillFilterEntry, "Add Skill", Settings.HighlightSkillColor.Value);
-
-        Section("Bad Skills (red -)");
-        DrawQuickAdd(ref _badSelectedAuraIndex, Settings.BadSkillFilter, AddBadAuraToFilter, "##badAura");
-        DrawFilterListEditor("##badInput", Settings.BadSkillFilter, ref _badSkillFilterInput, AddBadSkillFilterEntry, "Add Bad Skill", Settings.BadSkillColor.Value);
-
-        ImGui.TextWrapped("Filters use case-insensitive substring matching. Icicle Rain and Blast Rain are treated as aliases. If a skill matches both lists, the bad-skill display takes precedence.");
+        DrawSkillFilters();
 
         Section("Support Ratings (S/A/B/C/D)");
         ImGui.TextWrapped("Support gems in the mercenary offer window get a border and tier letter for how good the support is on the skill it's linked to. Combo-specific ratings override the support's global rating; unrated supports get nothing.");
@@ -243,6 +341,19 @@ public partial class MercScanner
             ImGui.Text($"{TierLetter(tier)} ({tier})");
         }
         ImGui.Text($"{Settings.SupportRatings.Count} rated supports, {Settings.SupportSkillOverrides.Count} combo overrides.");
+    }
+
+    private void DrawSkillFilters()
+    {
+        Section("Wanted Skills (green +)");
+        DrawQuickAdd(ref _selectedAuraIndex, Settings.SkillFilter, AddAuraToFilter, "##wantedAura");
+        DrawFilterListEditor("##wantedInput", Settings.SkillFilter, ref _skillFilterInput, AddSkillFilterEntry, "Add Skill", Settings.HighlightSkillColor.Value);
+
+        Section("Bad Skills (red -)");
+        DrawQuickAdd(ref _badSelectedAuraIndex, Settings.BadSkillFilter, AddBadAuraToFilter, "##badAura");
+        DrawFilterListEditor("##badInput", Settings.BadSkillFilter, ref _badSkillFilterInput, AddBadSkillFilterEntry, "Add Bad Skill", Settings.BadSkillColor.Value);
+
+        ImGui.TextWrapped("Filters use case-insensitive substring matching. Icicle Rain and Blast Rain are treated as aliases. If a skill matches both lists, the bad-skill display takes precedence.");
     }
 
     private void DrawQuickAdd(ref int selectedIndex, List<string> targetList, Action<string> addAura, string id)
@@ -377,6 +488,12 @@ public partial class MercScanner
         DrawToggle("Show Skill Cooldowns", Settings.ShowSkillCooldowns);
         DrawToggle("Show Filtered Buffs", Settings.ShowHiredMercBuffs);
 
+        if (!_showAdvancedSettings)
+        {
+            ImGui.TextDisabled("Cooldown bar styling is available in Advanced Mode.");
+            return;
+        }
+
         Section("Cooldown Bar Style");
         ImGui.BeginDisabled(!Settings.ShowSkillCooldowns.Value);
         var style = Settings.SkillCooldownBarStyle.Value;
@@ -402,15 +519,23 @@ public partial class MercScanner
     {
         DrawToggle("Show Link Status", Settings.ShowLinkStatus);
         DrawToggle("Auto-Cast Flame Link", Settings.AutoCastFlameLink);
-        DrawColor("Linked Color", Settings.LinkedColor);
-        DrawColor("Unlinked Color", Settings.UnlinkedColor);
 
-        Section("Cast Settings");
         ImGui.Text("Link Key");
         ImGui.SameLine();
         Settings.FlameLinkKey.DrawPickerButton("flamelinkkey");
         DrawToggle("Wait For Skill Ready", Settings.RequireSkillReady);
         DrawToggle("Restore Cursor", Settings.RestoreCursor);
+
+        if (!_showAdvancedSettings)
+        {
+            DrawFlameLinkStatus();
+            ImGui.TextDisabled("Colors, cast timing, and safety guards are available in Advanced Mode.");
+            return;
+        }
+
+        DrawColor("Linked Color", Settings.LinkedColor);
+
+        Section("Cast Settings");
         ImGui.BeginDisabled(!Settings.AutoCastFlameLink.Value);
         DrawSlider("Cursor Settle (ms)", Settings.CursorSettleMs);
         DrawSlider("Cursor Restore (ms)", Settings.CursorRestoreMs);
@@ -423,6 +548,11 @@ public partial class MercScanner
         ImGui.EndDisabled();
 
         Section("Auto-Cast Status");
+        DrawFlameLinkStatus();
+    }
+
+    private void DrawFlameLinkStatus()
+    {
         if (_flameLink == null)
             ImGui.Text("Status: not initialized");
         else

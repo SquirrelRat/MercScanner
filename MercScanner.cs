@@ -676,11 +676,20 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private void DrawLevelAndLinkStatus(float centerX, Entity mon, int? level, float currentTop, float lineHeight)
     {
         var linked = _flameLink != null && _flameLink.IsLinked(mon);
-        var linkText = linked ? "Linked" : "Unlinked";
-        var linkColor = linked ? Settings.LinkedColor.Value : Settings.UnlinkedColor.Value;
-
         var levelText = Settings.ShowMercLevel.Value && level is { } hiredLevel ? $"Lvl {hiredLevel}" : "";
         var levelSize = string.IsNullOrEmpty(levelText) ? default : ImGui.CalcTextSize(levelText);
+
+        if (!linked)
+        {
+            if (levelSize.X > 0)
+                Graphics.DrawTextWithBackground(levelText,
+                    new System.Numerics.Vector2(centerX - levelSize.X / 2, currentTop - levelSize.Y - 2),
+                    Settings.DefaultSkillColor.Value, Settings.BackgroundColor.Value);
+            return;
+        }
+
+        const string linkText = "Linked";
+        var linkColor = Settings.LinkedColor.Value;
         var linkSize = ImGui.CalcTextSize(linkText);
 
         const float gap = 6f;
