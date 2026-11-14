@@ -88,7 +88,7 @@ public partial class MercScanner
 
     private static void DrawStatusCard(string title, string value, SharpDX.Color color, float width)
     {
-        ImGui.BeginChild($"##card_{title}", new Vector2(width, 58f), ImGuiChildFlags.Border, ImGuiWindowFlags.NoScrollbar);
+        ImGui.BeginChild($"##card_{title}", new Vector2(width, 58f), ImGuiChildFlags.Borders, ImGuiWindowFlags.NoScrollbar);
         ImGui.PushStyleColor(ImGuiCol.Text, ToImGuiColor(color));
         ImGui.Text(title);
         ImGui.PopStyleColor();
