@@ -364,3 +364,8 @@ FodyWeavers.xsd
 
 # Loader build log
 Errors.txt
+# House plugin local files
+docs/
+dev/
+Tests/
+

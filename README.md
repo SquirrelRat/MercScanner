@@ -10,3 +10,9 @@ Shows HP and ES bars overhead, buff tracking, skill lists with attribute-colored
 <img width="344" height="390" alt="image" src="https://github.com/user-attachments/assets/2ee7ac30-df60-47a7-9fc0-3733f148447b" />
 
 Configurable distance filtering, per-stat colors, visibility toggles for each overlay type, an aura filter list, and custom tier colors.
+
+The settings window follows house UI v2; see `docs/house-ui.md` in the HUD root for the shared contract.
+
+## Version
+
+v1.0. See `CHANGELOG.md`.

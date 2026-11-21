@@ -1,6 +1,7 @@
 # Changelog
 
-## v1.0.0
+## v1.0
 
-- Builds against the current ExileCore and its ImGui library, so the plugin loads again.
+- Settings window rebuilt on house UI v2.
+- Builds against the current ExileCore and ImGui library.
 - Status cards use the renamed child border flag.

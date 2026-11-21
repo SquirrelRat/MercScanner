@@ -19,6 +19,7 @@ public partial class MercScanner : BaseSettingsPlugin<MercScannerSettings>
     private MercPanelScanner _panelScanner;
     private int _selectedAuraIndex = -1;
     private int _badSelectedAuraIndex = -1;
+    private int _settingsTab = 0;
     private string _skillFilterInput = "";
     private string _badSkillFilterInput = "";
     private readonly List<Entity> _hiredMercScratch = new();
